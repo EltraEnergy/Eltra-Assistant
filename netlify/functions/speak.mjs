@@ -1,5 +1,5 @@
 // ElevenLabs voice. GET lists the voices on your ElevenLabs account; POST {text, voice_id} returns the spoken reply as MP3.
-// Needs ELEVENLABS_API_KEY. Optional: ELEVENLABS_VOICE_ID (default voice), ELEVENLABS_MODEL (default eleven_flash_v2_5).
+// Needs ELEVENLABS_API_KEY. Optional: ELEVENLABS_VOICE_ID (default voice), ELEVENLABS_MODEL (default eleven_flash_v2_5; eleven_v4 / eleven_v4_turbo supported).
 import { json, guard } from '../lib/util.mjs';
 
 let voiceCache = null;
@@ -37,12 +37,17 @@ export default async (req) => {
   if (!voice) voice = defaultVoice(await listVoices(key).catch(() => []));
   if (!voice) return json(400, { error: 'No ElevenLabs voice found. Add one to your ElevenLabs account.' });
   const speed = Math.max(0.7, Math.min(1.2, +b.speed || 1));
+  // v4 models only take stability and similarity_boost; older models also take style, speaker boost and speed
+  const settings = (model) => /^eleven_v4/.test(model)
+    ? { stability: 0.45, similarity_boost: 0.8 }
+    : { stability: 0.45, similarity_boost: 0.8, style: 0.1, use_speaker_boost: true, speed };
   const call = (model) => fetch(API + '/text-to-speech/' + voice + '?output_format=mp3_44100_128', {
     method: 'POST', headers: { 'xi-api-key': key, 'Content-Type': 'application/json', Accept: 'audio/mpeg' },
-    body: JSON.stringify({ text, model_id: model, voice_settings: { stability: 0.45, similarity_boost: 0.8, style: 0.1, use_speaker_boost: true, speed } })
+    body: JSON.stringify({ text, model_id: model, voice_settings: settings(model) })
   });
-  let res = await call(process.env.ELEVENLABS_MODEL || 'eleven_flash_v2_5');
-  if (res.status === 400 || res.status === 422) res = await call('eleven_multilingual_v2'); // model name not available on this account
+  const model = process.env.ELEVENLABS_MODEL || 'eleven_flash_v2_5';
+  let res = await call(model);
+  if ((res.status === 400 || res.status === 422) && model !== 'eleven_flash_v2_5') res = await call('eleven_flash_v2_5'); // model not available on this account
   if (!res.ok) {
     const t = await res.text().catch(() => '');
     let msg = t; try { const d = JSON.parse(t); msg = (d.detail && (d.detail.message || d.detail.status || d.detail)) || t; } catch {}
