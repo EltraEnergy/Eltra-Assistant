@@ -58,10 +58,10 @@
   function renderNext() {
     if (!D || !D.calendar || D.calendar.error) return;
     var now = Date.now(), nx = events.filter(function (e) { return !e.allDay && (e.end ? e.end.getTime() : e.start.getTime()) > now; })[0];
-    if (!nx) { $('nextTitle').textContent = 'Clear for the rest of the week'; $('nextMeta').innerHTML = ''; setRing('00:00', 'nothing booked', 0); return; }
+    if (!nx) { $('nextTitle').textContent = 'Nothing else booked this week'; $('nextMeta').innerHTML = ''; setRing('00:00', 'nothing booked', 0); return; }
     var mins = Math.round((nx.start.getTime() - now) / 60000);
-    if (mins <= 0) setRing('LIVE', 'in progress', (now - nx.start.getTime()) / ((nx.end ? nx.end - nx.start : 3600e3)));
-    else if (mins < 1440) setRing(String(Math.floor(mins / 60)).padStart(2, '0') + ':' + String(mins % 60).padStart(2, '0'), 'hrs : min to go', 1 - mins / 1440);
+    if (mins <= 0) setRing('Now', 'in progress', (now - nx.start.getTime()) / ((nx.end ? nx.end - nx.start : 3600e3)));
+    else if (mins < 1440) setRing(String(Math.floor(mins / 60)).padStart(2, '0') + ':' + String(mins % 60).padStart(2, '0'), 'hours to go', 1 - mins / 1440);
     else setRing(Math.floor(mins / 1440) + 'd', fmt(nx.start, { weekday: 'long' }), 0.04);
     $('nextTitle').innerHTML = esc(nx.who && nx.who.name ? nx.who.name : nx.title) + (nx.sale ? '<span class="tag sale">Sales</span>' : '');
     var b = ['<span class="mono" style="color:var(--cyan)">' + esc(fmt(nx.start, { weekday: 'short', day: 'numeric', month: 'short' })) + ' · ' + esc(fmt(nx.start, { hour: 'numeric', minute: '2-digit' })) + '</span>'];
@@ -72,8 +72,8 @@
   }
   function section(r, el, none, render) {
     if (!r) return false;
-    if (r.error) { $(el).innerHTML = '<p class="note err">// ' + esc(r.error) + '</p>'; return false; }
-    if (!r.data.length) { $(el).innerHTML = '<p class="note">// ' + esc(none) + '</p>'; return true; }
+    if (r.error) { $(el).innerHTML = '<p class="note err">' + esc(r.error) + '</p>'; return false; }
+    if (!r.data.length) { $(el).innerHTML = '<p class="note">' + esc(none) + '</p>'; return true; }
     $(el).innerHTML = render(r.data); return true;
   }
   function renderAll() {
@@ -83,7 +83,7 @@
     $('sys').innerHTML = googleDot + dot(s.ghl, 'GoHighLevel') + dot(s.sm8, 'ServiceM8') + dot(s.voice, 'Voice');
 
     // calendar
-    if (!g.connected) { var msg = g.setUp ? 'Tap Connect Google at the top to load your calendar and email.' : 'Google isn’t set up yet. See SETUP.md.'; $('cal').innerHTML = $('mail').innerHTML = '<p class="note">// ' + msg + '</p>'; $('nextTitle').textContent = 'Calendar offline'; setRing('--', 'offline', 0); }
+    if (!g.connected) { var msg = g.setUp ? 'Tap Connect Google at the top to load your calendar and email.' : 'Google isn’t set up yet. See SETUP.md.'; $('cal').innerHTML = $('mail').innerHTML = '<p class="note">' + msg + '</p>'; $('nextTitle').textContent = 'Calendar not connected'; setRing('--', 'not connected', 0); }
     if (D.calendar && !D.calendar.error) events = parseEvents(D.calendar.data);
     section(D.calendar, 'cal', 'No bookings in the next 7 days.', function () {
       var today = dayKey(new Date()), tom = dayKey(new Date(Date.now() + 864e5)), now = Date.now(), h = '', cur = null;
@@ -94,7 +94,7 @@
         var d = [];
         if (e.location) d.push('<a href="' + mapsLink(e.location) + '" target="_blank" rel="noopener">' + esc(shortAddr(e.location)) + '</a>');
         if (e.who && e.who.phone) d.push('<span>' + phone(e.who.phone) + '</span>');
-        h += '<div class="ev' + (past ? ' past' : '') + (live ? ' now' : e.sale ? ' sale' : '') + '"><time>' + (e.allDay ? 'ALL DAY' : esc(fmt(e.start, { hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }))) + (!e.allDay && e.end ? '<small>' + Math.round((e.end - e.start) / 60000) + ' MIN</small>' : '') + '</time><div><div class="t"><a href="' + esc(e.link) + '" target="_blank" rel="noopener">' + esc(e.title) + '</a>' + (e.sale ? '<span class="tag sale">Sales</span>' : '') + '</div>' + (d.length ? '<div class="d">' + d.join('') + '</div>' : '') + '</div></div>';
+        h += '<div class="ev' + (past ? ' past' : '') + (live ? ' now' : e.sale ? ' sale' : '') + '"><time>' + (e.allDay ? 'All day' : esc(fmt(e.start, { hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }))) + (!e.allDay && e.end ? '<small>' + Math.round((e.end - e.start) / 60000) + ' min</small>' : '') + '</time><div><div class="t"><a href="' + esc(e.link) + '" target="_blank" rel="noopener">' + esc(e.title) + '</a>' + (e.sale ? '<span class="tag sale">Sales</span>' : '') + '</div>' + (d.length ? '<div class="d">' + d.join('') + '</div>' : '') + '</div></div>';
       });
       return h + '</div>';
     });
@@ -107,7 +107,7 @@
       return '<ul class="list">' + list.map(function (t) {
         var who = t.last_from_will ? 'You' : String(t.from || '').replace(/<.*>/, '').replace(/"/g, '').trim() || t.from, when = t.date_iso ? new Date(t.date_iso) : null;
         return '<li class="' + (t.unread ? 'unread' : '') + '"><button type="button" class="row" data-say="Read me the email conversation &quot;' + esc(t.subject) + '&quot; (thread ' + esc(t.thread_id) + ') and tell me if it needs anything from me.">' +
-          '<div class="r1"><span class="who">' + esc(who) + (t.messages > 1 ? ' [' + t.messages + ']' : '') + '</span><span class="dt">' + (when ? esc((dayKey(when) === dayKey(new Date()) ? fmt(when, { hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }) : fmt(when, { weekday: 'short', day: '2-digit', month: 'short' })).toUpperCase()) : '') + '</span></div>' +
+          '<div class="r1"><span class="who">' + esc(who) + (t.messages > 1 ? ' [' + t.messages + ']' : '') + '</span><span class="dt">' + (when ? esc((dayKey(when) === dayKey(new Date()) ? fmt(when, { hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }) : fmt(when, { weekday: 'short', day: '2-digit', month: 'short' }))) : '') + '</span></div>' +
           '<div class="s">' + esc(t.subject || '(no subject)') + (t.last_from_will ? '<span class="tag wait">Replied</span>' : '<span class="tag reply">Reply</span>') + '</div>' + (t.snippet ? '<div class="sn">' + esc(t.snippet) + '</div>' : '') + '</button></li>';
       }).join('') + '</ul>';
     });
@@ -124,20 +124,20 @@
     else if (!s.ghl) { $('sLeads').textContent = D.jobs && !D.jobs.error ? D.jobs.data.length : '–'; $('sLeadsLbl').textContent = D.jobs ? 'Jobs booked this week' : 'Open leads'; }
 
     // leads + jobs
-    if (!s.ghl) $('leads').innerHTML = '<p class="note">// Offline. Add GHL_TOKEN and GHL_LOCATION_ID in Netlify to connect GoHighLevel.</p>';
+    if (!s.ghl) $('leads').innerHTML = '<p class="note">Not connected yet. Add GHL_TOKEN and GHL_LOCATION_ID in Netlify to connect GoHighLevel.</p>';
     else section(D.leads, 'leads', 'No open leads.', function (list) {
-      return '<ul class="list">' + list.map(function (o) { return '<li><button type="button" class="row" data-say="What’s the latest with the lead ' + esc(o.name || '') + ' (opportunity ' + esc(o.id) + ')? What should I do next?"><div class="r1"><span class="who">' + esc(o.stage || '') + '</span><span class="dt">' + esc(String(o.updated || '').toUpperCase()) + '</span></div><div class="s">' + esc(o.name || (o.contact && o.contact.name) || 'Lead') + '</div>' + (o.contact && o.contact.phone ? '<div class="sn">' + esc(o.contact.phone) + '</div>' : '') + '</button></li>'; }).join('') + '</ul>';
+      return '<ul class="list">' + list.map(function (o) { return '<li><button type="button" class="row" data-say="What’s the latest with the lead ' + esc(o.name || '') + ' (opportunity ' + esc(o.id) + ')? What should I do next?"><div class="r1"><span class="who">' + esc(o.stage || '') + '</span><span class="dt">' + esc(String(o.updated || '')) + '</span></div><div class="s">' + esc(o.name || (o.contact && o.contact.name) || 'Lead') + '</div>' + (o.contact && o.contact.phone ? '<div class="sn">' + esc(o.contact.phone) + '</div>' : '') + '</button></li>'; }).join('') + '</ul>';
     });
-    if (!s.sm8) $('jobs').innerHTML = '<p class="note">// Offline. Add SERVICEM8_API_KEY in Netlify to connect ServiceM8.</p>';
+    if (!s.sm8) $('jobs').innerHTML = '<p class="note">Not connected yet. Add SERVICEM8_API_KEY in Netlify to connect ServiceM8.</p>';
     else section(D.jobs, 'jobs', 'Nothing booked in the next 7 days.', function (list) {
       return '<ul class="list">' + list.map(function (j) { var job = j.job || {}, m = String(j.start || '').match(/^(\d{4})-(\d{2})-(\d{2}) (\d{2}):(\d{2})/), when = m ? new Date(+m[1], +m[2] - 1, +m[3], +m[4], +m[5]) : null;
-        return '<li><button type="button" class="row" data-say="Tell me about ServiceM8 job ' + esc(job.job_no ? '#' + job.job_no : job.uuid) + ' at ' + esc(job.address || '') + '."><div class="r1"><span class="who">' + esc([job.job_no && '#' + job.job_no, job.status, j.staff].filter(Boolean).join(' · ')) + '</span><span class="dt">' + (when ? esc(when.toLocaleString('en-AU', { weekday: 'short', day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).toUpperCase()) : '') + '</span></div><div class="s">' + esc(job.address || 'Job') + '</div>' + (job.description ? '<div class="sn">' + esc(job.description) + '</div>' : '') + '</button></li>'; }).join('') + '</ul>';
+        return '<li><button type="button" class="row" data-say="Tell me about ServiceM8 job ' + esc(job.job_no ? '#' + job.job_no : job.uuid) + ' at ' + esc(job.address || '') + '."><div class="r1"><span class="who">' + esc([job.job_no && '#' + job.job_no, job.status, j.staff].filter(Boolean).join(' · ')) + '</span><span class="dt">' + (when ? esc(when.toLocaleString('en-AU', { weekday: 'short', day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' })) : '') + '</span></div><div class="s">' + esc(job.address || 'Job') + '</div>' + (job.description ? '<div class="sn">' + esc(job.description) + '</div>' : '') + '</button></li>'; }).join('') + '</ul>';
     });
   }
   var todayTimer = null;
   function loadToday() {
     clearTimeout(todayTimer); todayTimer = setTimeout(loadToday, 3 * 60000);
-    return api('today').then(function (d) { D = d; renderAll(); }).catch(function (e) { $('cal').innerHTML = '<p class="note err">// ' + esc(e.message) + '</p>'; });
+    return api('today').then(function (d) { D = d; renderAll(); }).catch(function (e) { $('cal').innerHTML = '<p class="note err">' + esc(e.message) + '</p>'; });
   }
   document.addEventListener('click', function (e) {
     var c = e.target.closest('[data-copy]');
@@ -163,7 +163,7 @@
   }
   function render() {
     var h = '';
-    if (!chat.messages.length) h = '<div class="empty">// Ask about your day, your email, a customer or a job</div>';
+    if (!chat.messages.length) h = '<div class="empty">Ask about your day, your email, a customer or a job</div>';
     chat.messages.forEach(function (m) {
       if (m.role === 'user') { if (typeof m.content === 'string') h += '<div class="m you">' + esc(m.content) + '</div>'; return; }
       (m.content || []).forEach(function (c) {
@@ -213,16 +213,16 @@
       render();
       var last = chat.messages[chat.messages.length - 1];
       var text = last && last.role === 'assistant' ? (last.content || []).filter(function (c) { return c.type === 'text'; }).map(function (c) { return c.text; }).join(' ') : '';
-      if (text) speak(text, true); else setState('idle', 'Standby');
+      if (text) speak(text, true); else setState('idle', 'Ready');
     }).catch(function (e) {
       if (aborted) return;
       if (e.data && e.data.messages) chat.messages = e.data.messages;
-      busy = false; steps = 0; lastError = e.message; persist(); render(); setState('idle', 'Standby');
+      busy = false; steps = 0; lastError = e.message; persist(); render(); setState('idle', 'Ready');
     });
   }
   $('askForm').addEventListener('submit', function (e) { e.preventDefault(); armed = false; ask($('askIn').value); });
   $('chips').addEventListener('click', function (e) { var b = e.target.closest('[data-say]'); if (b) ask(b.dataset.say); });
-  $('stop').onclick = function () { aborted = true; busy = false; steps = 0; hush(); stopListening(true); setState('idle', 'Standby'); render(); };
+  $('stop').onclick = function () { aborted = true; busy = false; steps = 0; hush(); stopListening(true); setState('idle', 'Ready'); render(); };
   $('clear').onclick = function () { if (busy) return; chat = { messages: [], approvals: null, results: {}, decided: {} }; lastError = null; persist(); render(); hush(); };
 
   // ================= voice out =================
@@ -242,7 +242,7 @@
   }
   function hush() { speaking = false; try { player.pause(); } catch (e) {} try { speechSynthesis.cancel(); } catch (e) {} }
   function clean(t) { return String(t).replace(/\*\*/g, '').replace(/^\s*[-•*]\s+/gm, '').replace(/https?:\/\/\S+/g, 'the link').slice(0, 1800); }
-  function afterSpeech(fromReply) { speaking = false; if (busy) return; setState('idle', 'Standby'); if (fromReply && $('convo').checked && canRecord) setTimeout(function () { if (!busy && !speaking) startListening(); }, 350); }
+  function afterSpeech(fromReply) { speaking = false; if (busy) return; setState('idle', 'Ready'); if (fromReply && $('convo').checked && canRecord) setTimeout(function () { if (!busy && !speaking) startListening(); }, 350); }
   function speak(text, fromReply) {
     if (!$('speak').checked || !text) { afterSpeech(fromReply); return; }
     hush(); speaking = true; setState('speaking', 'Speaking');
@@ -306,11 +306,11 @@
       recorder.onstop = function () {
         listening = false; clearInterval(vad); orb.style.removeProperty('--lvl');
         var blob = new Blob(chunks, { type: (recorder.mimeType || 'audio/webm').split(';')[0] });
-        if (cancelRec || !(heard || forceSend) || blob.size < 1500) { setState('idle', 'Standby'); return; }
+        if (cancelRec || !(heard || forceSend) || blob.size < 1500) { setState('idle', 'Ready'); return; }
         setState('thinking', 'Transcribing');
         api('listen', { method: 'POST', body: blob }).then(function (d) {
           if (d.text && d.text.trim().length > 1) ask(d.text); else { setState('idle', 'Didn’t catch that'); }
-        }).catch(function (e) { setState('idle', 'Standby'); lastError = 'Couldn’t hear that: ' + e.message; render(); });
+        }).catch(function (e) { setState('idle', 'Ready'); lastError = 'Couldn’t hear that: ' + e.message; render(); });
       };
       // simple voice activity detection: wait for speech, then stop after ~1.4 s of quiet
       if (!ac) ac = new (window.AudioContext || window.webkitAudioContext)();
@@ -338,7 +338,7 @@
         var rec = new SR(), text = ''; rec.lang = 'en-AU'; rec.interimResults = true;
         rec.onresult = function (e) { text = ''; for (var i = 0; i < e.results.length; i++) text += e.results[i][0].transcript; $('askIn').value = text; };
         rec.onerror = function () { SR = null; };
-        rec.onend = function () { listening = false; if (busy) return; setState('idle', 'Standby'); if (text.trim()) ask(text); };
+        rec.onend = function () { listening = false; if (busy) return; setState('idle', 'Ready'); if (text.trim()) ask(text); };
         rec.start(); listening = true; setState('listening', 'Listening'); return;
       } catch (e) { SR = null; }
     }
@@ -347,8 +347,8 @@
   }
   $('askIn').addEventListener('input', function () { clearTimeout(quiet); if (!armed || busy) return; quiet = setTimeout(function () { if (armed && $('askIn').value.trim()) { armed = false; ask($('askIn').value); } }, 2200); });
   $('askIn').addEventListener('keydown', function (e) { if (e.key !== 'Enter' && e.key !== 'Unidentified') armed = false; });
-  $('askIn').addEventListener('blur', function () { clearTimeout(quiet); armed = false; if (!busy && orb.dataset.state === 'listening' && !listening) setState('idle', 'Standby'); });
-  orb.onclick = function () { unlockAudio(); if (busy) return; if (speaking) { hush(); setState('idle', 'Standby'); return; } if (listening) { stopListening(false, true); return; } startListening(); };
+  $('askIn').addEventListener('blur', function () { clearTimeout(quiet); armed = false; if (!busy && orb.dataset.state === 'listening' && !listening) setState('idle', 'Ready'); });
+  orb.onclick = function () { unlockAudio(); if (busy) return; if (speaking) { hush(); setState('idle', 'Ready'); return; } if (listening) { stopListening(false, true); return; } startListening(); };
   document.addEventListener('keydown', function (e) { if (e.code === 'Space' && e.target === document.body) { e.preventDefault(); orb.click(); } });
 
   // ================= start =================
