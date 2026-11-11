@@ -19,7 +19,7 @@ async function pickModel(key, skip) {
 function systemPrompt(gs) {
   const have = [gs.connected ? 'Gmail, Google Calendar and Google Drive (' + (gs.email || 'Will’s account') + ')' : null, ghlReady() ? 'GoHighLevel (leads pipeline)' : null, sm8Ready() ? 'ServiceM8 (jobs and scheduling)' : null].filter(Boolean);
   return [
-    'You are Will Stafford’s assistant at Eltra Energy, a solar and battery installer in Melbourne (formerly Eltra Electrical). Will is the owner: he installs, runs sales appointments, quotes and does grid connection admin. They install Sigenergy, Anker and AlphaESS batteries.',
+    'Your name is Eltra. Will calls you Eltra, and you answer to it. You are Will Stafford’s assistant at Eltra Energy, a solar and battery installer in Melbourne (formerly Eltra Electrical). Will is the owner: he installs, runs sales appointments, quotes and does grid connection admin. They install Sigenergy, Anker and AlphaESS batteries.',
     'It is now ' + melbNow() + ' in Melbourne.',
     'Connected systems: ' + (have.length ? have.join('; ') : 'none yet') + '.' + (gs.setUp && !gs.connected ? ' Google is set up but not connected: tell Will to tap Connect Google on the dashboard.' : ''),
     '',

@@ -260,7 +260,7 @@
     </section>
   </div>
 
-  <section class="hud voice" aria-labelledby="vT">
+  <section class="hud voice" aria-label="Eltra assistant">
     <div class="vcore">
       <h2 class="vtitle" id="vT">Voice</h2>
       <button type="button" class="orb" id="orb" data-state="idle" aria-label="Talk">
@@ -271,6 +271,7 @@
       <div class="vopts">
         <label><input type="checkbox" id="speak" checked> Speak replies</label>
         <label><input type="checkbox" id="convo"> Keep listening after replies</label>
+        <label id="wakeRow"><input type="checkbox" id="wake"> Listen for “Eltra”</label>
       </div>
       <details class="vset">
         <summary>Voice settings</summary>
@@ -283,7 +284,7 @@
       </details>
     </div>
     <div class="vside">
-      <div class="hh"><h2>Assistant</h2><small><button type="button" class="copy" id="stop" hidden>Stop</button><button type="button" class="copy" id="clear">New chat</button></small></div>
+      <div class="hh"><h2>Eltra</h2><small><button type="button" class="copy" id="stop" hidden>Stop</button><button type="button" class="copy" id="clear">New chat</button></small></div>
       <div class="log" id="log" aria-live="polite"></div>
       <div class="chips" id="chips">
         <button type="button" data-say="Brief me on today and anything I need to deal with.">Brief me</button>
@@ -292,7 +293,7 @@
         <button type="button" data-say="Which leads need following up?">Leads to chase</button>
         <button type="button" data-say="What jobs are booked this week?">Jobs this week</button>
       </div>
-      <form class="ask" id="askForm"><input id="askIn" type="text" autocomplete="off" placeholder="Ask or tell me something…" aria-label="Message"><button type="submit" class="btn" id="sendBtn">Send</button></form>
+      <form class="ask" id="askForm"><input id="askIn" type="text" autocomplete="off" placeholder="Ask Eltra anything…" aria-label="Message"><button type="submit" class="btn" id="sendBtn">Send</button></form>
     </div>
   </section>
 

@@ -285,7 +285,7 @@
   $('rate').oninput = function () { vs.rate = +$('rate').value; save('eltra-hud-voice', vs); showRate(); };
   $('speak').checked = vs.speak !== false; $('speak').onchange = function () { vs.speak = $('speak').checked; save('eltra-hud-voice', vs); if (!$('speak').checked) hush(); };
   $('convo').checked = !!vs.convo; $('convo').onchange = function () { vs.convo = $('convo').checked; save('eltra-hud-voice', vs); };
-  $('testVoice').onclick = function () { unlockAudio(); var was = $('speak').checked; $('speak').checked = true; speak('G’day Will. This is how I’ll sound when I read out your brief.'); $('speak').checked = was; };
+  $('testVoice').onclick = function () { unlockAudio(); var was = $('speak').checked; $('speak').checked = true; speak('G’day Will, I’m Eltra. This is how I’ll sound when I read out your brief.'); $('speak').checked = was; };
   try { speechSynthesis.addEventListener('voiceschanged', fillVoices); } catch (e) {}
 
   // ================= voice in: record, stop on silence, transcribe =================
@@ -295,6 +295,7 @@
   function stopListening(cancel, manual) { cancelRec = !!cancel; forceSend = !!manual; if (recorder && recorder.state !== 'inactive') recorder.stop(); }
   function startListening() {
     if (listening || busy) return;
+    wakeStop();
     hush(); unlockAudio();
     if (!canRecord || !(voices && voices.configured)) return startFallback();
     cancelRec = false;
@@ -350,6 +351,43 @@
   $('askIn').addEventListener('blur', function () { clearTimeout(quiet); armed = false; if (!busy && orb.dataset.state === 'listening' && !listening) setState('idle', 'Ready'); });
   orb.onclick = function () { unlockAudio(); if (busy) return; if (speaking) { hush(); setState('idle', 'Ready'); return; } if (listening) { stopListening(false, true); return; } startListening(); };
   document.addEventListener('keydown', function (e) { if (e.code === 'Space' && e.target === document.body) { e.preventDefault(); orb.click(); } });
+
+  // ================= wake word: say "Eltra" =================
+  // Uses the browser's own speech recognition to listen for the name while the page is open (Chrome, Edge, Safari).
+  // "Eltra, brief me" asks straight away; "Eltra" on its own starts normal listening for the question.
+  var WSR = window.SpeechRecognition || window.webkitSpeechRecognition, wakeRec = null, wakeOn = !!vs.wake && !!WSR;
+  var WAKE = /\b(eltra|el tra|elltra|eltrah|elta|electra|ultra|altra)\b[\s,.!?]*/i;
+  function wakeStop() { if (wakeRec) { var r = wakeRec; wakeRec = null; try { r.onend = null; r.onresult = null; r.abort(); } catch (e) {} } }
+  function wakeStart() {
+    if (!wakeOn || wakeRec || busy || speaking || listening || document.hidden) return;
+    var r, fired = false;
+    try { r = new WSR(); } catch (e) { return; }
+    r.lang = 'en-AU'; r.continuous = true; r.interimResults = true;
+    r.onresult = function (e) {
+      if (fired) return;
+      for (var i = e.resultIndex; i < e.results.length; i++) {
+        var t = e.results[i][0].transcript, m = t.match(WAKE);
+        if (!m) continue;
+        var rest = t.slice(m.index + m[0].length).trim();
+        if (!e.results[i].isFinal) { setState('listening', 'Yes?'); continue; }
+        fired = true; wakeStop();
+        if (rest.length > 2) ask(rest); else { setState('listening', 'Yes?'); setTimeout(startListening, 300); }
+        return;
+      }
+    };
+    r.onerror = function (e) {
+      if (e.error === 'not-allowed' || e.error === 'service-not-allowed') { wakeOn = false; vs.wake = false; save('eltra-hud-voice', vs); $('wake').checked = false; $('vHint').textContent = 'Allow microphone access to use “Eltra”.'; }
+    };
+    r.onend = function () { if (wakeRec === r) wakeRec = null; if (!fired && orb.dataset.state === 'listening' && !listening && !busy) setState('idle', 'Ready'); };
+    try { r.start(); wakeRec = r; } catch (e) { wakeRec = null; }
+  }
+  function wakeHint() { $('vHint').textContent = wakeOn ? 'Say “Eltra” and your question, or tap the mic.' : 'Tap and talk. It sends when you stop.'; }
+  if (!WSR) { $('wakeRow').hidden = true; }
+  $('wake').checked = wakeOn;
+  $('wake').onchange = function () { wakeOn = $('wake').checked && !!WSR; vs.wake = wakeOn; save('eltra-hud-voice', vs); if (!wakeOn) wakeStop(); else { unlockAudio(); wakeStart(); } wakeHint(); };
+  wakeHint();
+  setInterval(function () { if (wakeOn) wakeStart(); else wakeStop(); }, 1200);
+  document.addEventListener('visibilitychange', function () { if (document.hidden) wakeStop(); });
 
   // ================= start =================
   function startApp() {
