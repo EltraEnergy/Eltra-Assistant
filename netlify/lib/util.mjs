@@ -27,9 +27,9 @@ export function checkPassword(pw) {
 export function sessionCookie() {
   const exp = Date.now() + DAYS * 864e5;
   const val = exp + '.' + sign('s:' + exp);
-  return COOKIE + '=' + val + '; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=' + DAYS * 86400;
+  return COOKIE + '=' + val + '; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=' + DAYS * 86400;
 }
-export const clearCookie = () => COOKIE + '=; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=0';
+export const clearCookie = () => COOKIE + '=; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=0';
 
 export function loggedIn(req) {
   const m = (req.headers.get('cookie') || '').match(new RegExp('(?:^|;\\s*)' + COOKIE + '=([^;]+)'));
