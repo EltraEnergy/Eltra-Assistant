@@ -193,11 +193,29 @@
     chat.approvals = chat.approvals.filter(function (x) { return x.id !== id; }); persist(); render();
     if (!chat.approvals.length) { var d = chat.decided; chat.decided = {}; chat.approvals = null; step(d); }
   });
+  function voiceAnswer(text) {
+    var t = String(text).toLowerCase().replace(/[’']/g, '').replace(/[^a-z\s]/g, ' ').replace(/\b(eltra|el tra|elta|electra|ultra|altra|please|mate|thanks|thank you)\b/g, ' ').replace(/\s+/g, ' ').trim();
+    if (!t || t.split(' ').length > 5) return null;
+    if (/^(yes|yeah|yep|yup|approve|approved|approve it|approve that|approve them|approve all|go ahead|do it|send it|send|ok|okay|confirm|confirmed|sure|go|looks good|thats fine|all good)( (yes|go ahead|do it|send it|approve|approve it|thats fine|all good|then))*$/.test(t)) return true;
+    if (/^(no|nope|nah|cancel|cancel it|cancel that|cancel them|dont|dont do it|dont send it|do not|stop|decline|hold off|not yet|leave it)( (no|cancel|cancel it|thanks|for now|then))*$/.test(t)) return false;
+    return null;
+  }
+  function decideAll(ok) {
+    var d = chat.decided || {};
+    (chat.approvals || []).forEach(function (a) { d[a.id] = ok; chat.results[a.id] = { title: a.title, ok: ok }; });
+    chat.decided = {}; chat.approvals = null; persist(); render(); step(d);
+  }
   function ask(text) {
     text = String(text || '').trim(); if (!text || busy) return;
     unlockAudio(); hush();
     $('askIn').value = '';
-    if (chat.approvals && chat.approvals.length) { var d = {}; chat.approvals.forEach(function (a) { d[a.id] = false; chat.results[a.id] = { title: a.title, ok: false }; }); chat.approvals = null; chat.pending = text; persist(); step(d); return; }
+    if (chat.approvals && chat.approvals.length) {
+      // Spoken or typed approval: a short "approve", "yes, send it", "go ahead"… approves everything waiting;
+      // "cancel", "no"… cancels it. Anything longer cancels and is treated as a new request, as before.
+      var said = voiceAnswer(text);
+      if (said !== null) { decideAll(said); if (!said) speak('Cancelled.'); return; }
+      var d = {}; chat.approvals.forEach(function (a) { d[a.id] = false; chat.results[a.id] = { title: a.title, ok: false }; }); chat.approvals = null; chat.pending = text; persist(); step(d); return;
+    }
     chat.messages.push({ role: 'user', content: text }); persist(); step({});
   }
   function step(decisions) {
@@ -205,7 +223,7 @@
     api('agent', { method: 'POST', body: { messages: chat.messages, decisions: decisions } }).then(function (d) {
       if (aborted) return;
       chat.messages = d.messages || chat.messages;
-      if (d.state === 'approval') { chat.approvals = d.approvals; busy = false; steps = 0; persist(); render(); setState('idle', 'Awaiting OK'); speak('I need your OK for ' + (d.approvals.length === 1 ? 'this.' : 'these.')); return; }
+      if (d.state === 'approval') { chat.approvals = d.approvals; busy = false; steps = 0; persist(); render(); setState('idle', 'Awaiting OK'); speak('Needs your OK: ' + d.approvals.map(function (a) { return a.title; }).join(', and ') + '. Say approve or cancel.', true); return; }
       if (d.acted && d.acted.length) setTimeout(loadToday, 1500);
       if (d.state === 'continue' && steps++ < 12) { persist(); render(); step({}); return; }
       busy = false; steps = 0; persist();
@@ -242,7 +260,7 @@
   }
   function hush() { speaking = false; try { player.pause(); } catch (e) {} try { speechSynthesis.cancel(); } catch (e) {} }
   function clean(t) { return String(t).replace(/\*\*/g, '').replace(/^\s*[-•*]\s+/gm, '').replace(/https?:\/\/\S+/g, 'the link').slice(0, 1800); }
-  function afterSpeech(fromReply) { speaking = false; if (busy) return; setState('idle', 'Ready'); if (fromReply && $('convo').checked && canRecord) setTimeout(function () { if (!busy && !speaking) startListening(); }, 350); }
+  function afterSpeech(fromReply) { speaking = false; if (busy) return; setState('idle', chat.approvals && chat.approvals.length ? 'Waiting for your OK' : 'Ready'); if (fromReply && $('convo').checked && canRecord) setTimeout(function () { if (!busy && !speaking) startListening(); }, 350); }
   function speak(text, fromReply) {
     if (!$('speak').checked || !text) { afterSpeech(fromReply); return; }
     hush(); speaking = true; setState('speaking', 'Speaking');

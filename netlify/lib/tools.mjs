@@ -129,9 +129,21 @@ tool({
     return one(await g(GMAIL + '/messages/' + encodeURIComponent(message_id) + '?format=full'));
   }
 });
+const escHtml = (t) => String(t).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+// Will's default Gmail signature (Settings > Signature). Needs no extra permission: gmail.modify can read it.
+async function gmailSignature() {
+  try {
+    const r = await g(GMAIL + '/settings/sendAs');
+    const list = r.sendAs || [];
+    const a = list.find((x) => x.isDefault) || list.find((x) => x.isPrimary) || list[0];
+    const html = a && a.signature ? a.signature : '';
+    const text = html ? html.replace(/<br\s*\/?>/gi, '\n').replace(/<\/(div|p|tr)>/gi, '\n').replace(/<[^>]+>/g, '').replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/\n{3,}/g, '\n\n').trim() : '';
+    return { html, text };
+  } catch (e) { return { html: '', text: '' }; }
+}
 tool({
   name: 'gmail_create_draft', group: 'google',
-  description: 'Create an email DRAFT in Will’s Gmail (nothing is sent). To reply in an existing conversation, pass reply_to_message_id and the draft goes into that thread. Write in Will’s voice: friendly, plain Australian English, short. Sign off as "Cheers,\\nWill\\nEltra Energy" unless told otherwise.',
+  description: 'Create an email DRAFT in Will’s Gmail (nothing is sent). To reply in an existing conversation, pass reply_to_message_id and the draft goes into that thread. Write in Will’s voice: friendly, plain Australian English, short. End the body with a short sign-off such as "Cheers," or "Thanks," and nothing after it: Will’s Gmail signature (name, details and logo) is added automatically underneath.',
   input_schema: { type: 'object', properties: { to: { type: 'string', description: 'Comma-separated addresses' }, cc: { type: 'string' }, subject: { type: 'string' }, body: { type: 'string', description: 'Plain text' }, reply_to_message_id: { type: 'string' } }, required: ['to', 'body'] },
   async run({ to, cc, subject, body, reply_to_message_id }) {
     let threadId, extra = '';
@@ -142,8 +154,15 @@ tool({
       if (mid) extra = 'In-Reply-To: ' + mid + '\r\nReferences: ' + (refs ? refs + ' ' : '') + mid + '\r\n';
       if (!subject) { const s = hdr(o, 'Subject'); subject = /^re:/i.test(s) ? s : 'Re: ' + s; }
     }
+    // Gmail doesn't add the signature to drafts made through the API, so add Will's default signature here
+    // (HTML, with a plain-text copy) and send the email as text + HTML like Gmail does.
+    const sig = await gmailSignature();
+    const textBody = body.replace(/\s+$/, '') + (sig.text ? '\n\n' + sig.text : '\nWill\nEltra Energy');
+    const htmlBody = '<div dir="ltr">' + escHtml(body.replace(/\s+$/, '')).replace(/\r?\n/g, '<br>') + (sig.html ? '<br><br><div class="gmail_signature" data-smartmail="gmail_signature">' + sig.html + '</div>' : '<br>Will<br>Eltra Energy') + '</div>';
+    const bnd = 'eltra_' + Date.now().toString(36);
+    const part = (type, txt) => '--' + bnd + '\r\nContent-Type: ' + type + '; charset=UTF-8\r\nContent-Transfer-Encoding: base64\r\n\r\n' + Buffer.from(txt).toString('base64').replace(/.{76}/g, '$&\r\n') + '\r\n';
     const raw = 'To: ' + to + '\r\n' + (cc ? 'Cc: ' + cc + '\r\n' : '') + 'Subject: ' + mimeWord(subject || '') + '\r\n' + extra +
-      'MIME-Version: 1.0\r\nContent-Type: text/plain; charset=UTF-8\r\nContent-Transfer-Encoding: base64\r\n\r\n' + Buffer.from(body).toString('base64').replace(/.{76}/g, '$&\r\n');
+      'MIME-Version: 1.0\r\nContent-Type: multipart/alternative; boundary="' + bnd + '"\r\n\r\n' + part('text/plain', textBody) + part('text/html', htmlBody) + '--' + bnd + '--';
     const d = await g(GMAIL + '/drafts', { method: 'POST', body: JSON.stringify({ message: { raw: b64url(raw), ...(threadId ? { threadId } : {}) } }) });
     return { draft_id: d.id, saved: 'Draft saved in Gmail. It has NOT been sent.', to, subject };
   }
