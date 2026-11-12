@@ -76,6 +76,47 @@ export async function sm8(path, opts = {}) {
 }
 const sm8Job = (j) => ({ uuid: j.uuid, job_no: j.generated_job_id, status: j.status, address: j.job_address, description: clip(j.job_description, 300), date: j.date, quote_total: j.total_invoice_amount || null });
 
+
+// Pylon (solar design and proposals). PYLON_API_TOKEN = a token from Pylon Settings > API (Read + Create).
+export const pylonReady = () => !!process.env.PYLON_API_TOKEN;
+const PYLON = 'https://api.getpylon.com/v1';
+export async function pylon(path, opts = {}) {
+  const res = await fetch(PYLON + path, {
+    ...opts, headers: { Authorization: 'Bearer ' + process.env.PYLON_API_TOKEN, Accept: 'application/vnd.api+json', ...(opts.body ? { 'Content-Type': 'application/vnd.api+json' } : {}) }
+  });
+  const text = await res.text(); let d; try { d = text ? JSON.parse(text) : {}; } catch { d = text; }
+  if (!res.ok) {
+    const why = d && (d.title || d.code) ? (d.title || d.code) + (d.errors ? ' ' + JSON.stringify(d.errors).slice(0, 200) : '') : String(text).slice(0, 200);
+    throw new Error('Pylon error ' + res.status + ': ' + why);
+  }
+  return d;
+}
+const cents = (c) => c == null ? null : '$' + (c / 100).toLocaleString('en-AU', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+const pylonAddr = (a) => a ? [a.line1, a.line2, a.city, a.state, a.zip].filter(Boolean).join(', ') : null;
+const pylonProject = (p) => {
+  const a = p.attributes || {}, r = p.relationships || {}, acc = a.acceptance || {};
+  return {
+    id: p.id, reference: a.reference_number, customer: a.customer_details || null, address: pylonAddr(a.site_address),
+    sold: !!acc.is_accepted, signed: !!acc.latest_esignature, marked_sold: !!acc.manually_sold,
+    status: !a.is_committed ? 'Awaiting activation in Pylon (location not confirmed yet)' : acc.is_accepted ? (acc.latest_esignature ? 'Signed' : 'Sold') : 'Proposal stage',
+    phases: a.site_details && a.site_details.power_phases, created: a.created_at ? melbDate(a.created_at) : null, updated: a.updated_at ? melbDate(a.updated_at) : null,
+    primary_design_id: r.primary_design && r.primary_design.data ? r.primary_design.data.id : null,
+    signed_design_id: r.latest_signed_design && r.latest_signed_design.data ? r.latest_signed_design.data.id : null
+  };
+};
+const DESIGN_FIELDS = 'title,label,is_primary,summary,pricing,proposal_quote,locale,module_types,inverter_types,storage_types,created_at,updated_at';
+const pylonDesign = (d) => {
+  const a = d.attributes || {}, s = a.summary || {}, q = a.proposal_quote || {}, au = (a.locale && a.locale.au) || {};
+  const parts = (list) => (list || []).map((x) => (x.quantity && x.quantity !== 1 ? x.quantity + ' × ' : '') + x.description);
+  return {
+    id: d.id, title: a.label || a.title, primary: !!a.is_primary, solar_kw: s.dc_output_kw, battery_kwh: s.storage_kwh, description: s.description,
+    total: q.total_price_formatted || cents(a.pricing && a.pricing.total), amount_payable: q.amount_payable_formatted || null, deposit: q.deposit_amount_formatted || null,
+    stcs: au.stc_quantity != null ? au.stc_quantity + (au.battery_stc_quantity ? ' solar + ' + au.battery_stc_quantity + ' battery' : '') : null,
+    panels: parts(a.module_types), inverters: parts(a.inverter_types), batteries: parts(a.storage_types),
+    proposal_link: s.web_proposal_url || null, pdf_link: s.pdf_proposal_url || null, updated: a.updated_at ? melbDate(a.updated_at) : null
+  };
+};
+
 // GoHighLevel booking invites carry the customer under "Invitee:" (name, email, phone, address)
 export function invitee(desc) {
   const t = strip(String(desc || '').replace(/<br\s*\/?>|<\/div>|<\/p>/gi, '\n'));
@@ -443,8 +484,74 @@ tool({
   }
 });
 
+
+tool({
+  name: 'pylon_find_projects', group: 'pylon',
+  description: 'Find Pylon projects (solar/battery designs and proposals), newest first. search matches the customer name, address, email, phone or reference number. sold_only shows accepted/signed ones. Each project shows whether it is sold or signed and its primary design id.',
+  input_schema: { type: 'object', properties: { search: { type: 'string' }, sold_only: { type: 'boolean' }, days: { type: 'integer', description: 'only projects created in the last N days' } } },
+  async run({ search, sold_only, days }) {
+    let url = '/solar_projects?sort=created_at.desc&filter[is_archived]=false' + (sold_only ? '&filter[acceptance]=is_accepted' : '') + (days ? '&filter[created_at.within]=P' + Math.max(1, Math.min(365, days)) + 'D' : '');
+    const out = [], q = String(search || '').toLowerCase().trim();
+    for (let page = 0; url && page < (q ? 6 : 2); page++) {
+      const d = await pylon(url.replace(PYLON, ''));
+      for (const p of d.data || []) {
+        const x = pylonProject(p), hay = JSON.stringify([x.reference, x.customer, x.address]).toLowerCase();
+        if (!q || q.split(/\s+/).every((w) => hay.includes(w))) out.push(x);
+      }
+      if (out.length >= 15) break;
+      url = d.links && d.links.next;
+    }
+    return { projects: out.slice(0, 15), note: out.length ? undefined : 'No matching Pylon projects found.' };
+  }
+});
+tool({
+  name: 'pylon_project', group: 'pylon',
+  description: 'Full details of one Pylon project and its designs: system size, panels, inverter, battery, price, STCs, deposit, whether it is sold or signed, and the proposal links. Use after pylon_find_projects.',
+  input_schema: { type: 'object', properties: { project_id: { type: 'string' } }, required: ['project_id'] },
+  async run({ project_id }) {
+    const p = await pylon('/solar_projects/' + encodeURIComponent(project_id));
+    const proj = pylonProject(p.data);
+    const ds = await pylon('/solar_designs?filter[project]=' + encodeURIComponent(project_id) + '&fields[solar_designs]=' + DESIGN_FIELDS).catch(() => ({ data: [] }));
+    const designs = (ds.data || []).map(pylonDesign).map((d) => ({ ...d, signed: d.id === proj.signed_design_id }));
+    return { project: proj, designs, note: 'The proposal link is the customer-facing page and includes their details; only share it with that customer.' };
+  }
+});
+tool({
+  name: 'pylon_create_project', group: 'pylon', action: true,
+  description: 'Set up a new Pylon project for a customer (for example from a GoHighLevel booking or calendar appointment). It is created UNCOMMITTED, so it costs no credits: it waits in Pylon under "Awaiting activation" until Will confirms the location there. Give the full street address split into parts. Checks for an existing project with the same reference first.',
+  input_schema: { type: 'object', properties: {
+    customer_name: { type: 'string' }, phone: { type: 'string' }, email: { type: 'string' },
+    street: { type: 'string', description: 'street line, e.g. 14 Grevillea Cres' }, suburb: { type: 'string' }, state: { type: 'string', description: 'e.g. Victoria' }, postcode: { type: 'string' },
+    reference: { type: 'string', description: 'optional; defaults to an ELTRA- reference' },
+    phases: { type: 'string', enum: ['one', 'three'] }, storeys: { type: 'integer' }, roof_type: { type: 'string' }
+  }, required: ['customer_name', 'street', 'suburb', 'postcode'] },
+  async describe(i) { return { title: 'Set up a Pylon project', lines: [i.customer_name, [i.street, i.suburb, i.state || 'Victoria', i.postcode].join(', '), [i.phone, i.email].filter(Boolean).join(' · '), 'Created as "Awaiting activation", so no credits are used until you confirm the location in Pylon.'].filter(Boolean) }; },
+  async run(i) {
+    const ref = i.reference || ('ELTRA-' + String(i.customer_name).replace(/[^A-Za-z]/g, '').slice(0, 10).toUpperCase() + '-' + String(i.postcode || '').replace(/\D/g, ''));
+    const dupe = await pylon('/solar_projects?filter[reference_number]=' + encodeURIComponent(ref) + '&filter[is_archived]=any&filter[is_committed]=any').catch(() => ({ data: [] }));
+    if (dupe.data && dupe.data.length) return { created: false, already_exists: pylonProject(dupe.data[0]) };
+    const site = {}; if (i.phases) site.power_phases = i.phases; if (i.storeys) site.number_of_storeys = i.storeys; if (i.roof_type) site.roof_type = i.roof_type;
+    const attrs = { is_committed: false, reference_number: ref,
+      site_address: { line1: i.street, line2: '', city: i.suburb, state: i.state || 'Victoria', zip: String(i.postcode), country: 'Australia' },
+      customer_details: { name: i.customer_name, phone: i.phone || '', email: i.email || '' } };
+    if (Object.keys(site).length) attrs.site_details = site;
+    const d = await pylon('/solar_projects', { method: 'POST', body: JSON.stringify({ data: { type: 'solar_projects', attributes: attrs } }) });
+    return { created: true, project: pylonProject(d.data), next_step: 'Open Pylon > Project Library > Awaiting activation, check the pin is on the right roof and confirm it to start designing.' };
+  }
+});
+tool({
+  name: 'pylon_new_project_link', group: 'pylon',
+  description: 'Make a link that opens Pylon on a customer\'s address with their details filled in, ready for Will to confirm and start a design himself. Nothing is created until he confirms in Pylon.',
+  input_schema: { type: 'object', properties: { address: { type: 'string' }, customer_name: { type: 'string' }, phone: { type: 'string' }, email: { type: 'string' } }, required: ['address'] },
+  async run(i) {
+    const q = new URLSearchParams({ search: i.address, country: 'AU' });
+    if (i.customer_name) q.set('customer_name', i.customer_name); if (i.email) q.set('customer_email', i.email); if (i.phone) q.set('customer_phone', i.phone);
+    return { link: 'https://app.getpylon.com/map/address?' + q.toString() };
+  }
+});
+
 // Tools available right now (only the systems that are set up)
 export function activeTools() {
-  return T.filter((t) => t.group === 'google' ? !!process.env.GOOGLE_CLIENT_ID : t.group === 'ghl' ? ghlReady() : t.group === 'sm8' ? sm8Ready() : true);
+  return T.filter((t) => t.group === 'google' ? !!process.env.GOOGLE_CLIENT_ID : t.group === 'ghl' ? ghlReady() : t.group === 'sm8' ? sm8Ready() : t.group === 'pylon' ? pylonReady() : true);
 }
 export const toolByName = (n) => T.find((t) => t.name === n);

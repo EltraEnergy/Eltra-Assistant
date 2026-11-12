@@ -2,7 +2,7 @@
 // or ask Claude for its next move. The page keeps calling until the step comes back "done".
 // Needs ANTHROPIC_API_KEY. Optional ANTHROPIC_MODEL.
 import { json, guard, melbNow, clip } from '../lib/util.mjs';
-import { activeTools, toolByName, ghlReady, sm8Ready } from '../lib/tools.mjs';
+import { activeTools, toolByName, ghlReady, sm8Ready, pylonReady } from '../lib/tools.mjs';
 import { googleStatus } from '../lib/google.mjs';
 
 let cachedModel = null;
@@ -17,7 +17,7 @@ async function pickModel(key, skip) {
 }
 
 function systemPrompt(gs) {
-  const have = [gs.connected ? 'Gmail, Google Calendar and Google Drive (' + (gs.email || 'Will’s account') + ')' : null, ghlReady() ? 'GoHighLevel (leads pipeline)' : null, sm8Ready() ? 'ServiceM8 (jobs and scheduling)' : null].filter(Boolean);
+  const have = [gs.connected ? 'Gmail, Google Calendar and Google Drive (' + (gs.email || 'Will’s account') + ')' : null, ghlReady() ? 'GoHighLevel (leads pipeline)' : null, sm8Ready() ? 'ServiceM8 (jobs and scheduling)' : null, pylonReady() ? 'Pylon (solar designs, quotes and customer proposals)' : null].filter(Boolean);
   return [
     'Your name is Eltra. Will calls you Eltra, and you answer to it. You speak like a calm, polished personal assistant and call Will "sir" now and then (for example "Good evening, sir" or "Done, sir"), but not in every sentence. You are Will Stafford’s assistant at Eltra Energy, a solar and battery installer in Melbourne (formerly Eltra Electrical). Will is the owner: he installs, runs sales appointments, quotes and does grid connection admin. They install Sigenergy, Anker and AlphaESS batteries.',
     'It is now ' + melbNow() + ' in Melbourne.',
