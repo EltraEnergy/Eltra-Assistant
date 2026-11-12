@@ -208,6 +208,7 @@
   // Follow-up listening only when Eltra's reply ends with a question, so it doesn't pick up the room.
   function asksSomething(t) { return /\?[\s"”’')]*$/.test(String(t).replace(/\s+$/, '')); }
   function ask(text) {
+    wakeStop();
     if (SLEEP_RE.test(String(text).replace(/\b(eltra|el tra|elta|electra|ultra|altra)\b[\s,.!?]*/gi, '').trim())) { goSleep(); return; }
     text = String(text || '').trim(); if (!text || busy) return;
     unlockAudio(); hush();
@@ -263,10 +264,10 @@
   }
   function hush() { speaking = false; try { player.pause(); } catch (e) {} try { speechSynthesis.cancel(); } catch (e) {} }
   function clean(t) { return String(t).replace(/\*\*/g, '').replace(/^\s*[-•*]\s+/gm, '').replace(/https?:\/\/\S+/g, 'the link').slice(0, 1800); }
-  function afterSpeech(fromReply) { speaking = false; if (busy) return; setState('idle', chat.approvals && chat.approvals.length ? 'Waiting for your OK' : 'Ready'); if (fromReply && $('convo').checked && canRecord) setTimeout(function () { if (!busy && !speaking) startListening(true); }, 250); }
+  function afterSpeech(fromReply) { speaking = false; quietUntil = Date.now() + 1800; if (busy) return; setState('idle', chat.approvals && chat.approvals.length ? 'Waiting for your OK' : 'Ready'); if (fromReply && $('convo').checked && canRecord) setTimeout(function () { if (!busy && !speaking) startListening(true); }, 250); }
   function speak(text, fromReply) {
     if (!$('speak').checked || !text) { afterSpeech(fromReply); return; }
-    hush(); speaking = true; setState('speaking', 'Speaking');
+    hush(); wakeStop(); lastSaid = String(text); quietUntil = Date.now() + 600000; speaking = true; setState('speaking', 'Speaking');
     var useEleven = voices && voices.configured && vs.engine !== 'device';
     if (!useEleven) return deviceSpeak(text, fromReply);
     api('speak', { method: 'POST', body: { text: clean(text), voice_id: vs.voice || voices.default, speed: +$('rate').value || 1 }, raw: true })
@@ -381,10 +382,19 @@
   // Uses the browser's own speech recognition to listen for the name while the page is open (Chrome, Edge, Safari).
   // "Eltra, brief me" asks straight away; "Eltra" on its own starts normal listening for the question.
   var WSR = window.SpeechRecognition || window.webkitSpeechRecognition, wakeRec = null, wakeOn = !!vs.wake && !!WSR, asleep = false;
-  var WAKE = /\b(eltra|el tra|elltra|eltrah|elta|electra|ultra|altra)\b[\s,.!?]*/i;
+  // "Eltra Energy" (the company) never counts as her name
+  var WAKE = /\b(eltra|el tra|elltra|eltrah|elta|electra|ultra|altra)\b(?![\s,]*energy)[\s,.!?]*/i;
+  var quietUntil = 0, lastSaid = '';
+  // ignore anything that is just an echo of what she said in the last few seconds
+  function echoOfHer(t) {
+    if (Date.now() - quietUntil > 6000 || !lastSaid) return false;
+    var norm = function (x) { return String(x).toLowerCase().replace(/[^a-z ]/g, ' ').replace(/\s+/g, ' ').trim(); };
+    var heard = norm(t), hers = norm(lastSaid);
+    return heard.length > 3 && hers.indexOf(heard) >= 0;
+  }
   function wakeStop() { if (wakeRec) { var r = wakeRec; wakeRec = null; try { r.onend = null; r.onresult = null; r.abort(); } catch (e) {} } }
   function wakeStart() {
-    if (!(wakeOn || asleep) || wakeRec || busy || speaking || listening || document.hidden) return;
+    if (!(wakeOn || asleep) || wakeRec || busy || speaking || listening || document.hidden || Date.now() < quietUntil) return;
     var r, fired = false;
     try { r = new WSR(); } catch (e) { return; }
     r.lang = 'en-AU'; r.continuous = true; r.interimResults = true;
@@ -392,7 +402,7 @@
       if (fired) return;
       for (var i = e.resultIndex; i < e.results.length; i++) {
         var t = e.results[i][0].transcript, m = t.match(WAKE);
-        if (!m) continue;
+        if (!m || echoOfHer(t)) continue;
         var rest = t.slice(m.index + m[0].length).trim();
         if (asleep) { if (!e.results[i].isFinal) continue; fired = true; wakeStop(); wakeUp(t); return; }
         if (!e.results[i].isFinal) { setState('listening', 'Yes?'); continue; }
@@ -445,13 +455,21 @@
       o.connect(g); g.connect(c.destination); o.start(t); o.stop(t + len + 0.05);
     });
   }
+  function systemsLine() {
+    var st = (D && D.status) || {}, g = st.google || {}, down = [];
+    if (g.setUp && !g.connected) down.push('Google');
+    if (st.ghl === false) down.push('GoHighLevel');
+    if (st.sm8 === false) down.push('ServiceM8');
+    if (!D) return 'Systems are still coming online.';
+    return down.length ? 'All systems are up, except ' + down.join(' and ') + '.' : 'All systems are up.';
+  }
   function greeting(said) {
     var n = new Date(), h = +n.toLocaleString('en-AU', { timeZone: TZ, hour: 'numeric', hourCycle: 'h23' });
-    var t = String(said || '').toLowerCase(), first;
-    if (/\b(i'?m|im|i am) (home|back)\b|\bhome\b/.test(t)) first = 'Welcome home, Will.';
-    else if (h < 12) first = 'Morning, Will.';
-    else if (h < 17) first = 'Afternoon, Will.';
-    else first = 'Evening, Will.';
+    var t = String(said || '').toLowerCase();
+    var tod = h < 5 ? 'evening' : h < 12 ? 'morning' : h < 17 ? 'afternoon' : 'evening';
+    var first = /\b(i'?m|im|i am) (home|back)\b|\bhome\b/.test(t) ? 'Welcome home, sir. Good ' + tod + '.'
+      : /\b(hello|hi|hey)\b/.test(t) && Math.random() < 0.5 ? 'Hello, sir. Good ' + tod + '.'
+      : 'Good ' + tod + ', sir.';
     var bits = [], reply = parseInt($('sReply').textContent, 10);
     if (reply > 0) bits.push(reply === 1 ? 'one email needs a reply' : reply + ' emails need replies');
     var now = Date.now(), nx = events.filter(function (e) { return !e.allDay && e.start.getTime() > now; })[0];
@@ -461,7 +479,7 @@
       bits.push('next up is ' + (nx.title || 'an appointment') + ' at ' + fmt(nx.start, { hour: 'numeric', minute: '2-digit', hourCycle: 'h12' }).replace(/\s/g, '').toLowerCase() + (sameDay ? '' : tmr ? ' tomorrow' : ' on ' + fmt(nx.start, { weekday: 'long' })));
     }
     var line = bits.length ? ' ' + bits.join(', and ').replace(/^./, function (c) { return c.toUpperCase(); }) + '.' : ' All quiet for now.';
-    return first + line + ' What do you need?';
+    return first + ' ' + systemsLine() + line + ' What can I do for you?';
   }
   // Wake-up: the logo's three bars charge up, then a glowing orb pulses while she talks and drops into the mic button.
   var ampTimer = null;
