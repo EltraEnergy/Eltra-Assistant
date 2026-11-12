@@ -205,6 +205,8 @@
     (chat.approvals || []).forEach(function (a) { d[a.id] = ok; chat.results[a.id] = { title: a.title, ok: ok }; });
     chat.decided = {}; chat.approvals = null; persist(); render(); step(d);
   }
+  // Follow-up listening only when Eltra's reply ends with a question, so it doesn't pick up the room.
+  function asksSomething(t) { return /\?[\s"”’')]*$/.test(String(t).replace(/\s+$/, '')); }
   function ask(text) {
     if (SLEEP_RE.test(String(text).replace(/\b(eltra|el tra|elta|electra|ultra|altra)\b[\s,.!?]*/gi, '').trim())) { goSleep(); return; }
     text = String(text || '').trim(); if (!text || busy) return;
@@ -232,7 +234,7 @@
       render();
       var last = chat.messages[chat.messages.length - 1];
       var text = last && last.role === 'assistant' ? (last.content || []).filter(function (c) { return c.type === 'text'; }).map(function (c) { return c.text; }).join(' ') : '';
-      if (text) speak(text, true); else setState('idle', 'Ready');
+      if (text) speak(text, asksSomething(text)); else setState('idle', 'Ready');
     }).catch(function (e) {
       if (aborted) return;
       if (e.data && e.data.messages) chat.messages = e.data.messages;
@@ -261,7 +263,7 @@
   }
   function hush() { speaking = false; try { player.pause(); } catch (e) {} try { speechSynthesis.cancel(); } catch (e) {} }
   function clean(t) { return String(t).replace(/\*\*/g, '').replace(/^\s*[-•*]\s+/gm, '').replace(/https?:\/\/\S+/g, 'the link').slice(0, 1800); }
-  function afterSpeech(fromReply) { speaking = false; if (busy) return; setState('idle', chat.approvals && chat.approvals.length ? 'Waiting for your OK' : 'Ready'); if (fromReply && $('convo').checked && canRecord) setTimeout(function () { if (!busy && !speaking) startListening(); }, 350); }
+  function afterSpeech(fromReply) { speaking = false; if (busy) return; setState('idle', chat.approvals && chat.approvals.length ? 'Waiting for your OK' : 'Ready'); if (fromReply && $('convo').checked && canRecord) setTimeout(function () { if (!busy && !speaking) startListening(true); }, 250); }
   function speak(text, fromReply) {
     if (!$('speak').checked || !text) { afterSpeech(fromReply); return; }
     hush(); speaking = true; setState('speaking', 'Speaking');
@@ -312,8 +314,10 @@
   var stream = null, recorder = null, chunks = [], listening = false, vad = null, ac = null, cancelRec = false, forceSend = false;
   function mimeType() { var t = ['audio/webm;codecs=opus', 'audio/webm', 'audio/mp4', 'audio/ogg']; for (var i = 0; i < t.length; i++) if (MediaRecorder.isTypeSupported && MediaRecorder.isTypeSupported(t[i])) return t[i]; return ''; }
   function stopListening(cancel, manual) { cancelRec = !!cancel; forceSend = !!manual; if (recorder && recorder.state !== 'inactive') recorder.stop(); }
-  function startListening() {
+  var followUp = false, noSpeech = false;
+  function startListening(isFollowUp) {
     if (listening || busy) return;
+    followUp = isFollowUp === true;
     wakeStop();
     hush(); unlockAudio();
     if (!canRecord || !(voices && voices.configured)) return startFallback();
@@ -326,10 +330,12 @@
       recorder.onstop = function () {
         listening = false; clearInterval(vad); orb.style.removeProperty('--lvl');
         var blob = new Blob(chunks, { type: (recorder.mimeType || 'audio/webm').split(';')[0] });
+        if (noSpeech && !followUp) { noSpeech = false; setState('idle', 'Didn’t hear anything'); $('vHint').textContent = 'I didn’t hear anything. Tap the mic and try again, a little closer.'; return; }
+        noSpeech = false;
         if (cancelRec || !(heard || forceSend) || blob.size < 1500) { setState('idle', 'Ready'); return; }
         setState('thinking', 'Transcribing');
         api('listen', { method: 'POST', body: blob }).then(function (d) {
-          if (d.text && d.text.trim().length > 1) ask(d.text); else { setState('idle', 'Didn’t catch that'); }
+          if (d.text && d.text.trim().length > 1) { wakeHint(); ask(d.text); } else { setState('idle', 'Didn’t catch that'); $('vHint').textContent = 'I couldn’t make that out. Tap the mic and try again.'; }
         }).catch(function (e) { setState('idle', 'Ready'); lastError = 'Couldn’t hear that: ' + e.message; render(); });
       };
       // simple voice activity detection: wait for speech, then stop after ~1.4 s of quiet
@@ -341,10 +347,10 @@
         an.getByteTimeDomainData(buf); var sum = 0; for (var i = 0; i < buf.length; i++) { var v = (buf[i] - 128) / 128; sum += v * v; }
         var rms = Math.sqrt(sum / buf.length), now = Date.now();
         orb.style.setProperty('--lvl', Math.min(14, rms * 120).toFixed(1) + 'px');
-        if (now - startAt < 400) { floor = Math.max(floor, rms * 1.8); return; }
-        if (rms > Math.max(0.02, floor)) { heard = true; quietSince = 0; }
+        if (now - startAt < 300) { floor = Math.min(0.04, Math.max(floor, rms * 1.6)); if (rms > 0.06) heard = true; return; }
+        if (rms > Math.max(0.018, floor)) { heard = true; quietSince = 0; }
         else if (heard) { if (!quietSince) quietSince = now; if (now - quietSince > 1400) stopListening(false); }
-        if (!heard && now - startAt > 8000) stopListening(true);
+        if (!heard && now - startAt > (followUp ? 6000 : 8000)) { noSpeech = true; stopListening(true); }
         if (now - startAt > 45000) stopListening(false);
       }, 80);
       recorder.start(250); listening = true; setState('listening', 'Listening');
@@ -368,7 +374,7 @@
   $('askIn').addEventListener('input', function () { clearTimeout(quiet); if (!armed || busy) return; quiet = setTimeout(function () { if (armed && $('askIn').value.trim()) { armed = false; ask($('askIn').value); } }, 2200); });
   $('askIn').addEventListener('keydown', function (e) { if (e.key !== 'Enter' && e.key !== 'Unidentified') armed = false; });
   $('askIn').addEventListener('blur', function () { clearTimeout(quiet); armed = false; if (!busy && orb.dataset.state === 'listening' && !listening) setState('idle', 'Ready'); });
-  orb.onclick = function () { unlockAudio(); if (busy) return; if (speaking) { hush(); setState('idle', 'Ready'); return; } if (listening) { stopListening(false, true); return; } startListening(); };
+  orb.onclick = function () { unlockAudio(); if (busy) return; if (speaking) { hush(); setState('idle', 'Ready'); return; } if (listening) { stopListening(false, true); return; } startListening(false); };
   document.addEventListener('keydown', function (e) { if (e.code === 'Space' && e.target === document.body) { e.preventDefault(); orb.click(); } });
 
   // ================= wake word: say "Eltra" =================
@@ -392,7 +398,7 @@
         if (!e.results[i].isFinal) { setState('listening', 'Yes?'); continue; }
         fired = true; wakeStop();
         if (SLEEP_RE.test(rest)) { goSleep(); return; }
-        if (rest.length > 2) ask(rest); else { setState('listening', 'Yes?'); setTimeout(startListening, 300); }
+        if (rest.length > 2) ask(rest); else { setState('listening', 'Yes?'); setTimeout(startListening, 120); }
         return;
       }
     };
@@ -457,22 +463,50 @@
     var line = bits.length ? ' ' + bits.join(', and ').replace(/^./, function (c) { return c.toUpperCase(); }) + '.' : ' All quiet for now.';
     return first + line + ' What do you need?';
   }
+  // Wake-up: the logo's three bars charge up, then a glowing orb pulses while she talks and drops into the mic button.
+  var ampTimer = null;
+  function orbPulse(on) {
+    var el = $('pOrb'); clearInterval(ampTimer);
+    if (!on) { el.style.setProperty('--amp', 1); return; }
+    var a = 1;
+    ampTimer = setInterval(function () {
+      var target = speaking ? 1 + Math.random() * 0.24 : busy ? 1 + 0.05 * Math.sin(Date.now() / 220) : 1 + 0.03 * Math.sin(Date.now() / 600);
+      a += (target - a) * 0.45; el.style.setProperty('--amp', a.toFixed(3));
+    }, 90);
+  }
+  function orbToMic() {
+    var pv = $('powerView'), el = $('pOrb'), r = orb.getBoundingClientRect(), o = el.getBoundingClientRect();
+    orbPulse(false);
+    if (r.width && r.top > 0 && r.bottom < innerHeight) {
+      var dx = (r.left + r.width / 2) - (o.left + o.width / 2), dy = (r.top + r.height / 2) - (o.top + o.height / 2);
+      el.style.transition = 'transform .7s cubic-bezier(.5,0,.2,1), opacity .35s ease .45s';
+      el.style.transform = 'translate(' + dx + 'px,' + dy + 'px) scale(' + (r.width / o.width).toFixed(3) + ')';
+    }
+    pv.classList.add('done');
+    setTimeout(function () { pv.hidden = true; pv.className = 'power'; el.removeAttribute('style'); pv.querySelectorAll('.bar').forEach(function (b) { b.classList.remove('on'); }); }, 800);
+  }
   function wakeUp(said) {
     if (!asleep) return;
     asleep = false; clearInterval(sleepClock); letSleep();
-    var cv = $('callView'), st = $('callState'); cv.classList.remove('out', 'connected'); cv.hidden = false; st.textContent = 'Calling…';
-    chime([523.25, 659.25], 0, 0.5); chime([523.25, 659.25], 0.9, 0.5);
+    var pv = $('powerView'), bars = pv.querySelectorAll('.bar'), calm = matchMedia('(prefers-reduced-motion: reduce)').matches;
+    pv.className = 'power'; pv.hidden = false; $('pState').textContent = '';
     $('sleepView').hidden = true; document.body.style.overflow = '';
     loadToday();
     // whatever came after the greeting ("hey Eltra, I'm home, what's on tomorrow?") becomes the first question
     var rest = String(said || '').replace(/^.*?\b(eltra|el tra|elltra|eltrah|elta|electra|ultra|altra)\b[\s,.!?]*/i, '')
       .replace(/^(i'?m|im|i am) (home|back)[\s,.!?]*/i, '').replace(/^(wake up|you there\??|are you there\??|hello|hi|hey)[\s,.!?]*/i, '').trim();
+    var notes = [523.25, 659.25, 783.99], gap = calm ? 0 : 320;
+    [0, 1, 2].forEach(function (k) { setTimeout(function () { bars[k].classList.add('on'); chime([notes[k]], 0, 0.45); }, 200 + k * gap); });
+    setTimeout(function () { pv.classList.add('lit'); }, 200 + 3 * gap);
     setTimeout(function () {
-      cv.classList.add('connected'); st.textContent = 'Connected'; chime([783.99], 0, 0.35);
-      var t0 = Date.now(), timer = setInterval(function () { var s = Math.floor((Date.now() - t0) / 1000); st.textContent = '0:' + (s < 10 ? '0' : '') + s; }, 500);
-      setTimeout(function () { cv.classList.add('out'); setTimeout(function () { cv.hidden = true; cv.classList.remove('out'); clearInterval(timer); }, 500); }, 1500);
-      if (rest.split(' ').length >= 3) ask(rest); else speak(greeting(said), true);
-    }, 1900);
+      pv.classList.add('talk'); orbPulse(!calm);
+      if (rest.split(' ').length >= 3) { $('pState').textContent = 'On it…'; ask(rest); } else speak(greeting(said), true);
+      var t0 = Date.now(), started = false, iv = setInterval(function () {
+        if (speaking || busy) started = true;
+        var finished = started ? !speaking && !busy : Date.now() - t0 > 1500;
+        if (finished || Date.now() - t0 > 25000) { clearInterval(iv); orbToMic(); }
+      }, 150);
+    }, calm ? 700 : 1650);
   }
   $('sleepBtn').onclick = goSleep;
   $('wakeBtn').onclick = function () { wakeUp('wake up'); };

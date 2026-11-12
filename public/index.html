@@ -209,7 +209,7 @@
   }
 
   /* sleep screen and the wake-up "call" */
-  .sleep, .call { position: fixed; inset: 0; z-index: 50; display: grid; place-items: center; text-align: center; color: #fff; padding: 24px; background: #0B1E36; }
+  .sleep { position: fixed; inset: 0; z-index: 50; display: grid; place-items: center; text-align: center; color: #fff; padding: 24px; background: #0B1E36; }
   .sleep .inner { display: grid; gap: 14px; justify-items: center; }
   .sleep img { height: 34px; opacity: .9; }
   .sleep .sclock { font-family: var(--head); font-weight: 700; font-size: clamp(64px, 12vw, 120px); line-height: 1; font-variant-numeric: tabular-nums; letter-spacing: .5px; }
@@ -218,23 +218,31 @@
   .sleep .breathe { width: 10px; height: 10px; border-radius: 50%; background: #5FA2FF; }
   .sleep .snote { font-size: 14px; color: rgba(255,255,255,.55); max-width: 36ch; }
   .sleep .wakebtn { margin-top: 8px; font: inherit; font-weight: 600; font-size: 15px; color: #fff; background: rgba(255,255,255,.1); border: 1px solid rgba(255,255,255,.3); border-radius: 999px; padding: 9px 18px; min-height: 44px; cursor: pointer; }
-  .call { background: radial-gradient(circle at 50% 38%, #1F6FE0 0%, #123C7A 45%, #0B1E36 100%); }
-  .call .inner { display: grid; gap: 10px; justify-items: center; }
-  .call .avatar { position: relative; width: 150px; height: 150px; border-radius: 50%; background: #fff; display: grid; place-items: center; margin-bottom: 18px; }
-  .call .avatar span { font-family: var(--head); font-weight: 700; font-size: 72px; color: var(--blue); line-height: 1; }
-  .call .avatar::before, .call .avatar::after, .call .avatar i { content: ""; position: absolute; inset: 0; border-radius: 50%; border: 2px solid rgba(255,255,255,.6); opacity: 0; }
-  .call h2 { margin: 0; font-family: var(--head); font-weight: 700; font-size: 40px; }
-  .call p { margin: 0; font-size: 18px; color: rgba(255,255,255,.8); font-variant-numeric: tabular-nums; }
-  .call.out { opacity: 0; transition: opacity .5s ease; }
+  .power { position: fixed; inset: 0; z-index: 50; display: grid; place-items: center; pointer-events: none; }
+  .power .pbg { position: absolute; inset: 0; background: #0B1E36; transition: opacity .7s ease; }
+  .power.talk .pbg { opacity: .55; }
+  .power.done .pbg { opacity: 0; }
+  .pmark { position: relative; display: grid; justify-items: center; gap: 16px; transition: opacity .5s ease, transform .6s ease; }
+  .pmark svg { width: 200px; height: auto; overflow: visible; }
+  .pmark .bar { fill: rgba(255,255,255,.08); stroke: rgba(255,255,255,.35); stroke-width: 1.2; transition: fill .35s ease, stroke .35s ease, filter .35s ease; }
+  .pmark .bar.on { fill: #FFFFFF; stroke: #FFFFFF; filter: drop-shadow(0 0 10px rgba(120,175,255,.9)); }
+  .pname { font-family: var(--head); font-weight: 700; font-size: 34px; letter-spacing: 6px; color: #fff; opacity: 0; transition: opacity .5s ease; }
+  .power.lit .pname { opacity: 1; }
+  .power.lit .pmark svg { filter: drop-shadow(0 0 24px rgba(95,162,255,.55)); }
+  .power.talk .pmark { opacity: 0; transform: translateY(-30px) scale(.9); }
+  .porb { position: absolute; top: 50%; left: 50%; margin: -75px 0 0 -75px; width: 150px; height: 150px; border-radius: 50%; opacity: 0;
+    background: radial-gradient(circle at 38% 32%, #FFFFFF 0%, #BFD8FF 22%, #5FA2FF 50%, #1F6FE0 78%, #1758B8 100%);
+    box-shadow: 0 0 40px rgba(95,162,255,.7), 0 0 110px rgba(31,111,224,.5);
+    transform: scale(calc(var(--amp, 1) * .2)); transition: transform .09s linear, opacity .4s ease; }
+  .power.talk .porb { opacity: 1; transform: scale(var(--amp, 1)); }
+  .power.done .porb { opacity: 0; }
+  .power .pstate { position: absolute; top: calc(50% + 100px); margin: 0; color: #fff; font-size: 16px; opacity: 0; transition: opacity .4s; }
+  .power.talk .pstate { opacity: .85; }
+  .power.done .pstate { opacity: 0; }
   .ghost.sleepbtn { display: inline-flex; align-items: center; gap: 6px; }
   @media (prefers-reduced-motion: no-preference) {
     .sleep .breathe { animation: breathe 3s ease-in-out infinite; }
     @keyframes breathe { 50% { opacity: .25; transform: scale(.7); } }
-    .call .avatar::before { animation: ripple 1.8s ease-out infinite; }
-    .call .avatar::after { animation: ripple 1.8s ease-out .6s infinite; }
-    .call .avatar i { animation: ripple 1.8s ease-out 1.2s infinite; }
-    .call.connected .avatar::before, .call.connected .avatar::after, .call.connected .avatar i { animation: none; }
-    @keyframes ripple { 0% { transform: scale(1); opacity: .7; } 100% { transform: scale(2.1); opacity: 0; } }
   }
 </style>
 </head>
@@ -299,7 +307,7 @@
       <p class="vhint" id="vHint">Tap and talk. It sends when you stop.</p>
       <div class="vopts">
         <label><input type="checkbox" id="speak" checked> Speak replies</label>
-        <label><input type="checkbox" id="convo"> Keep listening after replies</label>
+        <label><input type="checkbox" id="convo"> Listen for my answer when Eltra asks something</label>
         <label id="wakeRow"><input type="checkbox" id="wake"> Listen for “Eltra”</label>
       </div>
       <details class="vset">
@@ -358,12 +366,14 @@
     <button type="button" class="wakebtn" id="wakeBtn">Wake up</button>
   </div>
 </div>
-<div class="call" id="callView" hidden aria-live="assertive">
-  <div class="inner">
-    <div class="avatar" aria-hidden="true"><i></i><span>E</span></div>
-    <h2>Eltra</h2>
-    <p id="callState">Calling…</p>
+<div class="power" id="powerView" hidden aria-live="polite">
+  <div class="pbg"></div>
+  <div class="pmark" aria-hidden="true">
+    <svg viewBox="0 0 96 30"><polygon class="bar" points="10,0 32,0 22,30 0,30"/><polygon class="bar" points="42,0 64,0 54,30 32,30"/><polygon class="bar" points="74,0 96,0 86,30 64,30"/></svg>
+    <div class="pname">ELTRA</div>
   </div>
+  <div class="porb" id="pOrb"></div>
+  <p class="pstate" id="pState"></p>
 </div>
 <script src="app.js"></script>
 </body>
