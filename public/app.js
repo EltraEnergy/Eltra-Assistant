@@ -149,7 +149,7 @@
   var CHAT = 'eltra-hud-chat-v1';
   var chat = load(CHAT, null) || { messages: [], approvals: null, results: {}, decided: {} };
   var busy = false, lastError = null, steps = 0, aborted = false;
-  var LABELS = { gmail_search: 'Searching email', gmail_read: 'Reading email', gmail_create_draft: 'Drafting email', gmail_send_draft: 'Sending email', gmail_archive: 'Archiving email', gmail_save_attachments: 'Saving attachments', calendar_events: 'Checking calendar', calendar_create_event: 'Adding to calendar', drive_search: 'Searching Drive', drive_list_folder: 'Opening folder', drive_move: 'Moving files', drive_create_folder: 'Creating folder', drive_rename: 'Renaming', ghl_pipelines: 'Checking pipeline', ghl_search_opportunities: 'Looking up leads', ghl_search_contacts: 'Looking up contacts', ghl_move_opportunity: 'Updating lead', ghl_add_note: 'Adding note', ghl_add_task: 'Adding task', sm8_jobs: 'Looking up jobs', sm8_schedule: 'Checking schedule', sm8_add_job_note: 'Adding job note', sm8_create_job: 'Creating job' };
+  var LABELS = { gmail_search: 'Searching email', gmail_read: 'Reading email', gmail_create_draft: 'Drafting email', gmail_send_draft: 'Sending email', gmail_archive: 'Archiving email', gmail_save_attachments: 'Saving attachments', calendar_events: 'Checking calendar', calendar_create_event: 'Adding to calendar', drive_search: 'Searching Drive', sheets_read: 'Reading sheet', drive_read_file: 'Reading file', drive_list_folder: 'Opening folder', drive_move: 'Moving files', drive_create_folder: 'Creating folder', drive_rename: 'Renaming', ghl_pipelines: 'Checking pipeline', ghl_search_opportunities: 'Looking up leads', ghl_search_contacts: 'Looking up contacts', ghl_move_opportunity: 'Updating lead', ghl_add_note: 'Adding note', ghl_add_task: 'Adding task', sm8_jobs: 'Looking up jobs', sm8_schedule: 'Checking schedule', sm8_add_job_note: 'Adding job note', sm8_create_job: 'Creating job' };
   function persist() { save(CHAT, chat); }
   function md(t) {
     var out = '', inList = false;
@@ -206,6 +206,7 @@
     chat.decided = {}; chat.approvals = null; persist(); render(); step(d);
   }
   function ask(text) {
+    if (SLEEP_RE.test(String(text).replace(/\b(eltra|el tra|elta|electra|ultra|altra)\b[\s,.!?]*/gi, '').trim())) { goSleep(); return; }
     text = String(text || '').trim(); if (!text || busy) return;
     unlockAudio(); hush();
     $('askIn').value = '';
@@ -373,11 +374,11 @@
   // ================= wake word: say "Eltra" =================
   // Uses the browser's own speech recognition to listen for the name while the page is open (Chrome, Edge, Safari).
   // "Eltra, brief me" asks straight away; "Eltra" on its own starts normal listening for the question.
-  var WSR = window.SpeechRecognition || window.webkitSpeechRecognition, wakeRec = null, wakeOn = !!vs.wake && !!WSR;
+  var WSR = window.SpeechRecognition || window.webkitSpeechRecognition, wakeRec = null, wakeOn = !!vs.wake && !!WSR, asleep = false;
   var WAKE = /\b(eltra|el tra|elltra|eltrah|elta|electra|ultra|altra)\b[\s,.!?]*/i;
   function wakeStop() { if (wakeRec) { var r = wakeRec; wakeRec = null; try { r.onend = null; r.onresult = null; r.abort(); } catch (e) {} } }
   function wakeStart() {
-    if (!wakeOn || wakeRec || busy || speaking || listening || document.hidden) return;
+    if (!(wakeOn || asleep) || wakeRec || busy || speaking || listening || document.hidden) return;
     var r, fired = false;
     try { r = new WSR(); } catch (e) { return; }
     r.lang = 'en-AU'; r.continuous = true; r.interimResults = true;
@@ -387,8 +388,10 @@
         var t = e.results[i][0].transcript, m = t.match(WAKE);
         if (!m) continue;
         var rest = t.slice(m.index + m[0].length).trim();
+        if (asleep) { if (!e.results[i].isFinal) continue; fired = true; wakeStop(); wakeUp(t); return; }
         if (!e.results[i].isFinal) { setState('listening', 'Yes?'); continue; }
         fired = true; wakeStop();
+        if (SLEEP_RE.test(rest)) { goSleep(); return; }
         if (rest.length > 2) ask(rest); else { setState('listening', 'Yes?'); setTimeout(startListening, 300); }
         return;
       }
@@ -404,8 +407,76 @@
   $('wake').checked = wakeOn;
   $('wake').onchange = function () { wakeOn = $('wake').checked && !!WSR; vs.wake = wakeOn; save('eltra-hud-voice', vs); if (!wakeOn) wakeStop(); else { unlockAudio(); wakeStart(); } wakeHint(); };
   wakeHint();
-  setInterval(function () { if (wakeOn) wakeStart(); else wakeStop(); }, 1200);
+  setInterval(function () { if (wakeOn || asleep) wakeStart(); else wakeStop(); }, 1200);
   document.addEventListener('visibilitychange', function () { if (document.hidden) wakeStop(); });
+
+  // ================= sleep mode and the wake-up call =================
+  // "Sleep" (or "Eltra, go to sleep") dims the dashboard to a clock and keeps listening for her name.
+  // "Hey Eltra, I'm home" plays a short call animation, then she greets you and gives a quick rundown.
+  var SLEEP_RE = /^(go to sleep|go to bed|sleep|sleep mode|goodnight|good night|nighty night|that'?s all( for (now|today))?|bye|goodbye|see you|see ya|talk later)[\s.!]*$/i;
+  var wakeLock = null, sleepClock = null, actx = null;
+  function keepAwake() { try { if (navigator.wakeLock && !wakeLock) navigator.wakeLock.request('screen').then(function (l) { wakeLock = l; l.addEventListener('release', function () { wakeLock = null; }); }).catch(function () {}); } catch (e) {} }
+  function letSleep() { try { if (wakeLock) wakeLock.release(); } catch (e) {} wakeLock = null; }
+  function sleepTick() {
+    var n = new Date();
+    $('sClock').textContent = fmt(n, { hour: '2-digit', minute: '2-digit', hourCycle: 'h23' });
+    $('sDate').textContent = fmt(n, { weekday: 'long', day: 'numeric', month: 'long' });
+  }
+  function goSleep() {
+    if (asleep) return;
+    unlockAudio(); audioCtx(); hush(); wakeStop();
+    asleep = true; $('sleepView').hidden = false; document.body.style.overflow = 'hidden';
+    $('sHint').textContent = WSR ? 'Say “Hey Eltra” to wake me' : 'Tap below to wake me (voice wake-up needs Chrome, Edge or Safari)';
+    sleepTick(); clearInterval(sleepClock); sleepClock = setInterval(sleepTick, 10000);
+    keepAwake(); setState('idle', 'Asleep');
+  }
+  function audioCtx() { try { if (!actx) actx = new (window.AudioContext || window.webkitAudioContext)(); if (actx.state === 'suspended') actx.resume(); } catch (e) { actx = null; } return actx; }
+  function chime(freqs, at, len) {
+    var c = audioCtx(); if (!c) return;
+    freqs.forEach(function (f, i) {
+      var o = c.createOscillator(), g = c.createGain(), t = c.currentTime + at + i * 0.16;
+      o.type = 'sine'; o.frequency.value = f; g.gain.setValueAtTime(0, t); g.gain.linearRampToValueAtTime(0.12, t + 0.02); g.gain.exponentialRampToValueAtTime(0.0001, t + len);
+      o.connect(g); g.connect(c.destination); o.start(t); o.stop(t + len + 0.05);
+    });
+  }
+  function greeting(said) {
+    var n = new Date(), h = +n.toLocaleString('en-AU', { timeZone: TZ, hour: 'numeric', hourCycle: 'h23' });
+    var t = String(said || '').toLowerCase(), first;
+    if (/\b(i'?m|im|i am) (home|back)\b|\bhome\b/.test(t)) first = 'Welcome home, Will.';
+    else if (h < 12) first = 'Morning, Will.';
+    else if (h < 17) first = 'Afternoon, Will.';
+    else first = 'Evening, Will.';
+    var bits = [], reply = parseInt($('sReply').textContent, 10);
+    if (reply > 0) bits.push(reply === 1 ? 'one email needs a reply' : reply + ' emails need replies');
+    var now = Date.now(), nx = events.filter(function (e) { return !e.allDay && e.start.getTime() > now; })[0];
+    if (nx) {
+      var sameDay = fmt(nx.start, { day: 'numeric', month: 'numeric' }) === fmt(n, { day: 'numeric', month: 'numeric' });
+      var tmr = fmt(nx.start, { day: 'numeric', month: 'numeric' }) === fmt(new Date(now + 86400000), { day: 'numeric', month: 'numeric' });
+      bits.push('next up is ' + (nx.title || 'an appointment') + ' at ' + fmt(nx.start, { hour: 'numeric', minute: '2-digit', hourCycle: 'h12' }).replace(/\s/g, '').toLowerCase() + (sameDay ? '' : tmr ? ' tomorrow' : ' on ' + fmt(nx.start, { weekday: 'long' })));
+    }
+    var line = bits.length ? ' ' + bits.join(', and ').replace(/^./, function (c) { return c.toUpperCase(); }) + '.' : ' All quiet for now.';
+    return first + line + ' What do you need?';
+  }
+  function wakeUp(said) {
+    if (!asleep) return;
+    asleep = false; clearInterval(sleepClock); letSleep();
+    var cv = $('callView'), st = $('callState'); cv.classList.remove('out', 'connected'); cv.hidden = false; st.textContent = 'Calling…';
+    chime([523.25, 659.25], 0, 0.5); chime([523.25, 659.25], 0.9, 0.5);
+    $('sleepView').hidden = true; document.body.style.overflow = '';
+    loadToday();
+    // whatever came after the greeting ("hey Eltra, I'm home, what's on tomorrow?") becomes the first question
+    var rest = String(said || '').replace(/^.*?\b(eltra|el tra|elltra|eltrah|elta|electra|ultra|altra)\b[\s,.!?]*/i, '')
+      .replace(/^(i'?m|im|i am) (home|back)[\s,.!?]*/i, '').replace(/^(wake up|you there\??|are you there\??|hello|hi|hey)[\s,.!?]*/i, '').trim();
+    setTimeout(function () {
+      cv.classList.add('connected'); st.textContent = 'Connected'; chime([783.99], 0, 0.35);
+      var t0 = Date.now(), timer = setInterval(function () { var s = Math.floor((Date.now() - t0) / 1000); st.textContent = '0:' + (s < 10 ? '0' : '') + s; }, 500);
+      setTimeout(function () { cv.classList.add('out'); setTimeout(function () { cv.hidden = true; cv.classList.remove('out'); clearInterval(timer); }, 500); }, 1500);
+      if (rest.split(' ').length >= 3) ask(rest); else speak(greeting(said), true);
+    }, 1900);
+  }
+  $('sleepBtn').onclick = goSleep;
+  $('wakeBtn').onclick = function () { wakeUp('wake up'); };
+  document.addEventListener('visibilitychange', function () { if (!document.hidden && asleep) keepAwake(); });
 
   // ================= start =================
   function startApp() {

@@ -262,6 +262,49 @@ tool({
     return (d.files || []).map(fileOut);
   }
 });
+const SHEETS = 'https://sheets.googleapis.com/v4/spreadsheets';
+const PRICING_ID = '12VOySK_Rx0-v7oiRR6nM2W8pWESgVcCMzroURWZOKE8';
+// Accepts a sheet id, a docs.google.com link or part of the file name.
+async function findSheet(which) {
+  const w = String(which || '').trim();
+  if (!w || /^(pricing|price list|system pricing|prices)$/i.test(w)) return PRICING_ID;
+  const m = w.match(/\/d\/([A-Za-z0-9_-]{20,})/); if (m) return m[1];
+  if (/^[A-Za-z0-9_-]{30,}$/.test(w)) return w;
+  const d = await g(DRIVE + '/files?' + ALL + '&pageSize=5&orderBy=modifiedTime desc&fields=files(id,name)&q=' + encodeURIComponent("trashed = false and mimeType = 'application/vnd.google-apps.spreadsheet' and name contains '" + q(w) + "'"));
+  if (!d.files || !d.files.length) throw new Error('No Google Sheet found matching "' + w + '"');
+  return d.files[0].id;
+}
+tool({
+  name: 'sheets_read', group: 'google',
+  description: 'Read a Google Sheet. Eltra’s price list is the "System Pricing" sheet (pass sheet "pricing"). Its tabs: "Solar Only Single Phase", "Solar Only Three Phase", "Battery Only Single Phase", "Battery Only Three Phase" (cost build-up: inverter, panels or modules, labour, accessories, totals ex and incl GST, before rebates), "Rebates" (STC price) and "App feed" (what the quote app uses: final prices incl GST before rebates, settings, extras). Without a range it lists the tabs and returns the first part of the first tab; with a range (e.g. "\'Battery Only Single Phase\'!A1:J20" or just a tab name) it returns those cells. Read-only.',
+  input_schema: { type: 'object', properties: { sheet: { type: 'string', description: 'Sheet name, link or id. "pricing" for the System Pricing sheet.' }, range: { type: 'string', description: 'A1 range or tab name' } }, required: ['sheet'] },
+  async run({ sheet, range }) {
+    const id = await findSheet(sheet);
+    const meta = await g(SHEETS + '/' + id + '?fields=properties.title,sheets.properties(title,gridProperties(rowCount,columnCount))');
+    const tabs = (meta.sheets || []).map((x) => x.properties.title);
+    let r = range || ("'" + (tabs[0] || 'Sheet1').replace(/'/g, "''") + "'!A1:Z60");
+    if (range && !/!/.test(range) && tabs.indexOf(range.replace(/^'|'$/g, '')) >= 0) r = "'" + range.replace(/^'|'$/g, '').replace(/'/g, "''") + "'!A1:Z200";
+    const v = await g(SHEETS + '/' + id + '/values/' + encodeURIComponent(r) + '?valueRenderOption=FORMATTED_VALUE');
+    let rows = (v.values || []).filter((row) => row.some((c) => String(c).trim() !== ''));
+    const total = rows.length; rows = rows.slice(0, 200);
+    return { title: meta.properties && meta.properties.title, tabs, range: v.range, rows, note: total > 200 ? 'Showing the first 200 of ' + total + ' rows; ask for a smaller range.' : undefined };
+  }
+});
+tool({
+  name: 'drive_read_file', group: 'google',
+  description: 'Read the text of a Google Doc, a Google Sheet (first tab, as CSV) or a plain text/CSV file in Drive, by file id. Use drive_search first to get the id. For a sheet with several tabs, sheets_read is better.',
+  input_schema: { type: 'object', properties: { file_id: { type: 'string' } }, required: ['file_id'] },
+  async run({ file_id }) {
+    const f = await g(DRIVE + '/files/' + encodeURIComponent(file_id) + '?supportsAllDrives=true&fields=id,name,mimeType');
+    const ex = { 'application/vnd.google-apps.document': 'text/plain', 'application/vnd.google-apps.spreadsheet': 'text/csv', 'application/vnd.google-apps.presentation': 'text/plain' }[f.mimeType];
+    let text;
+    if (ex) text = await g(DRIVE + '/files/' + encodeURIComponent(file_id) + '/export?mimeType=' + encodeURIComponent(ex));
+    else if (/^text\/|json|csv/.test(f.mimeType)) text = await g(DRIVE + '/files/' + encodeURIComponent(file_id) + '?alt=media&supportsAllDrives=true');
+    else return { name: f.name, mime_type: f.mimeType, note: 'This file type can’t be read as text here (e.g. PDF or image).' };
+    text = typeof text === 'string' ? text : JSON.stringify(text);
+    return { name: f.name, text: clip(text, 20000) };
+  }
+});
 async function names(ids) { return Promise.all(ids.map((id) => g(DRIVE + '/files/' + encodeURIComponent(id) + '?supportsAllDrives=true&fields=name').then((f) => f.name).catch(() => id))); }
 tool({
   name: 'drive_move', group: 'google', action: true,

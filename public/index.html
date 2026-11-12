@@ -207,6 +207,35 @@
     .act.wait { animation: fade 1.2s ease-in-out infinite; }
     @keyframes fade { 50% { opacity: .45; } }
   }
+
+  /* sleep screen and the wake-up "call" */
+  .sleep, .call { position: fixed; inset: 0; z-index: 50; display: grid; place-items: center; text-align: center; color: #fff; padding: 24px; background: #0B1E36; }
+  .sleep .inner { display: grid; gap: 14px; justify-items: center; }
+  .sleep img { height: 34px; opacity: .9; }
+  .sleep .sclock { font-family: var(--head); font-weight: 700; font-size: clamp(64px, 12vw, 120px); line-height: 1; font-variant-numeric: tabular-nums; letter-spacing: .5px; }
+  .sleep .sdate { font-size: 18px; color: rgba(255,255,255,.7); }
+  .sleep .shint { margin-top: 26px; font-size: 16px; color: rgba(255,255,255,.75); display: flex; align-items: center; gap: 10px; }
+  .sleep .breathe { width: 10px; height: 10px; border-radius: 50%; background: #5FA2FF; }
+  .sleep .snote { font-size: 14px; color: rgba(255,255,255,.55); max-width: 36ch; }
+  .sleep .wakebtn { margin-top: 8px; font: inherit; font-weight: 600; font-size: 15px; color: #fff; background: rgba(255,255,255,.1); border: 1px solid rgba(255,255,255,.3); border-radius: 999px; padding: 9px 18px; min-height: 44px; cursor: pointer; }
+  .call { background: radial-gradient(circle at 50% 38%, #1F6FE0 0%, #123C7A 45%, #0B1E36 100%); }
+  .call .inner { display: grid; gap: 10px; justify-items: center; }
+  .call .avatar { position: relative; width: 150px; height: 150px; border-radius: 50%; background: #fff; display: grid; place-items: center; margin-bottom: 18px; }
+  .call .avatar span { font-family: var(--head); font-weight: 700; font-size: 72px; color: var(--blue); line-height: 1; }
+  .call .avatar::before, .call .avatar::after, .call .avatar i { content: ""; position: absolute; inset: 0; border-radius: 50%; border: 2px solid rgba(255,255,255,.6); opacity: 0; }
+  .call h2 { margin: 0; font-family: var(--head); font-weight: 700; font-size: 40px; }
+  .call p { margin: 0; font-size: 18px; color: rgba(255,255,255,.8); font-variant-numeric: tabular-nums; }
+  .call.out { opacity: 0; transition: opacity .5s ease; }
+  .ghost.sleepbtn { display: inline-flex; align-items: center; gap: 6px; }
+  @media (prefers-reduced-motion: no-preference) {
+    .sleep .breathe { animation: breathe 3s ease-in-out infinite; }
+    @keyframes breathe { 50% { opacity: .25; transform: scale(.7); } }
+    .call .avatar::before { animation: ripple 1.8s ease-out infinite; }
+    .call .avatar::after { animation: ripple 1.8s ease-out .6s infinite; }
+    .call .avatar i { animation: ripple 1.8s ease-out 1.2s infinite; }
+    .call.connected .avatar::before, .call.connected .avatar::after, .call.connected .avatar i { animation: none; }
+    @keyframes ripple { 0% { transform: scale(1); opacity: .7; } 100% { transform: scale(2.1); opacity: 0; } }
+  }
 </style>
 </head>
 <body>
@@ -225,7 +254,7 @@
 <header class="status"><div class="wrap">
   <div class="logo"><img src="logo.png" alt="Eltra Energy"></div>
   <div class="sys" id="sys" aria-label="Connections"></div>
-  <div class="hright"><span class="clock" id="clock">--:--</span><button type="button" class="ghost" id="logout">Log out</button></div>
+  <div class="hright"><span class="clock" id="clock">--:--</span><button type="button" class="ghost sleepbtn" id="sleepBtn" title="Say “Hey Eltra” to wake her">Sleep</button><button type="button" class="ghost" id="logout">Log out</button></div>
 </div></header>
 
 <main class="wrap">
@@ -319,6 +348,22 @@
     </section>
   </div>
 </main>
+</div>
+<div class="sleep" id="sleepView" hidden aria-live="polite">
+  <div class="inner">
+    <img src="logo.png" alt="Eltra Energy">
+    <div class="sclock" id="sClock">--:--</div>
+    <div class="sdate" id="sDate"></div>
+    <div class="shint"><span class="breathe" aria-hidden="true"></span><span id="sHint">Say “Hey Eltra” to wake me</span></div>
+    <button type="button" class="wakebtn" id="wakeBtn">Wake up</button>
+  </div>
+</div>
+<div class="call" id="callView" hidden aria-live="assertive">
+  <div class="inner">
+    <div class="avatar" aria-hidden="true"><i></i><span>E</span></div>
+    <h2>Eltra</h2>
+    <p id="callState">Calling…</p>
+  </div>
 </div>
 <script src="app.js"></script>
 </body>
