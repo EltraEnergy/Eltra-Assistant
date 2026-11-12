@@ -244,6 +244,50 @@
     .sleep .breathe { animation: breathe 3s ease-in-out infinite; }
     @keyframes breathe { 50% { opacity: .25; transform: scale(.7); } }
   }
+
+  /* dock, drawers, status pill (settings and chat tucked away) */
+  .pill { display: inline-flex; align-items: center; gap: 8px; font: inherit; font-size: 14px; font-weight: 600; color: #fff; background: rgba(255,255,255,.14); border: 0; border-radius: 999px; padding: 6px 12px 6px 10px; min-height: 34px; cursor: pointer; }
+  .pill:hover { background: rgba(255,255,255,.22); }
+  .pill .dot { margin: 0; }
+  .iconbtn { width: 44px; height: 44px; display: grid; place-items: center; background: transparent; border: 1px solid rgba(255,255,255,.45); border-radius: 10px; color: #fff; cursor: pointer; }
+  .iconbtn:hover { background: rgba(255,255,255,.12); }
+  .dock { position: fixed; right: max(20px, env(safe-area-inset-right, 0px)); bottom: max(20px, env(safe-area-inset-bottom, 0px)); z-index: 20; display: flex; align-items: center; gap: 12px; background: #fff; border: 1px solid var(--line); border-radius: 999px; padding: 8px 10px 8px 8px; box-shadow: 0 10px 30px rgba(20,38,61,.16); max-width: calc(100vw - 40px); }
+  .dock .orb { width: 56px; height: 56px; box-shadow: 0 0 0 calc(6px + var(--lvl, 0px)) var(--blue-soft); }
+  .dock .orb svg { width: 24px; height: 24px; }
+  .dock .orb[data-state="listening"] { box-shadow: 0 0 0 calc(6px + var(--lvl, 0px)) var(--green-soft); }
+  .dock .orb[data-state="speaking"] { box-shadow: 0 0 0 9px var(--blue-soft); }
+  .dtext { line-height: 1.25; min-width: 0; max-width: 260px; }
+  .dtext b { font-weight: 700; }
+  #vState { color: var(--muted); font-size: 14px; }
+  #vHint { font-size: 13px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .chatbtn { width: 44px; height: 44px; border-radius: 50%; border: 1px solid var(--line); background: #fff; color: var(--blue); display: grid; place-items: center; cursor: pointer; position: relative; }
+  .chatbtn:hover { background: var(--blue-soft); }
+  .chatbtn.has::after { content: ""; position: absolute; top: 6px; right: 6px; width: 9px; height: 9px; border-radius: 50%; background: var(--amber); border: 2px solid #fff; }
+  .scrim { position: fixed; inset: 0; z-index: 30; border: 0; background: rgba(11,30,54,.35); cursor: default; }
+  .drawer { position: fixed; top: 0; right: 0; bottom: 0; z-index: 31; width: min(420px, 100%); background: #fff; box-shadow: -10px 0 40px rgba(20,38,61,.18); display: flex; flex-direction: column; padding-top: env(safe-area-inset-top, 0px); padding-bottom: env(safe-area-inset-bottom, 0px); }
+  .dhead { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 12px 14px 12px 18px; border-bottom: 1px solid var(--line); }
+  .dhead h2 { margin: 0; font-family: var(--head); font-weight: 700; font-size: 22px; }
+  .dtools { display: flex; align-items: center; gap: 6px; }
+  .xbtn { width: 44px; height: 44px; border: 0; background: transparent; font-size: 24px; line-height: 1; color: var(--muted); cursor: pointer; border-radius: 8px; }
+  .xbtn:hover { background: var(--paper); }
+  .drawer .log { flex: 1; max-height: none; min-height: 0; }
+  .dbody { overflow-y: auto; padding: 4px 18px 24px; display: grid; gap: 12px; align-content: start; }
+  .dbody h3 { margin: 16px 0 0; font-size: 15px; color: var(--muted); font-weight: 600; }
+  .dbody .vopts { gap: 12px; }
+  .dbody .vopts label { font-size: 15.5px; }
+  .dbody .vgrid { margin: 0; }
+  .dbody .sys { display: grid; }
+  .dbody .sys > span { display: flex; align-items: center; padding: 10px 0; border-bottom: 1px solid var(--line); font-size: 15.5px; }
+  .dbody .sys a { color: var(--blue); font-weight: 600; margin-left: auto; }
+  .dbody .dot { background: #B8C3D1; } .dbody .dot.on { background: var(--green); } .dbody .dot.warn { background: var(--amber); }
+  .pill .dot.on { background: #6EE7B0; } .pill .dot.warn { background: #FFC56B; }
+  .dbody .btn.no { justify-self: start; }
+  main.wrap { padding-bottom: 120px; }
+  @media (max-width: 560px) {
+    .dock { left: 12px; right: 12px; max-width: none; }
+    .dtext { flex: 1; max-width: none; }
+    .hright .clock { display: none; }
+  }
 </style>
 </head>
 <body>
@@ -261,8 +305,8 @@
 <div id="appView" hidden>
 <header class="status"><div class="wrap">
   <div class="logo"><img src="logo.png" alt="Eltra Energy"></div>
-  <div class="sys" id="sys" aria-label="Connections"></div>
-  <div class="hright"><span class="clock" id="clock">--:--</span><button type="button" class="ghost sleepbtn" id="sleepBtn" title="Say “Hey Eltra” to wake her">Sleep</button><button type="button" class="ghost" id="logout">Log out</button></div>
+  <button type="button" class="pill" id="sysPill" title="Connections"><i class="dot"></i><span>Checking systems…</span></button>
+  <div class="hright"><span class="clock" id="clock">--:--</span><button type="button" class="iconbtn" id="sleepBtn" aria-label="Sleep" title="Sleep (say “Hey Eltra” to wake her)"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg></button><button type="button" class="iconbtn" id="gearBtn" aria-label="Settings" title="Settings"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg></button></div>
 </div></header>
 
 <main class="wrap">
@@ -297,42 +341,6 @@
     </section>
   </div>
 
-  <section class="hud voice" aria-label="Eltra assistant">
-    <div class="vcore">
-      <h2 class="vtitle" id="vT">Voice</h2>
-      <button type="button" class="orb" id="orb" data-state="idle" aria-label="Talk">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg>
-      </button>
-      <div class="vstate" id="vState" aria-live="polite">Ready</div>
-      <p class="vhint" id="vHint">Tap and talk. It sends when you stop.</p>
-      <div class="vopts">
-        <label><input type="checkbox" id="speak" checked> Speak replies</label>
-        <label><input type="checkbox" id="convo"> Listen for my answer when Eltra asks something</label>
-        <label id="wakeRow"><input type="checkbox" id="wake"> Listen for “Eltra”</label>
-      </div>
-      <details class="vset">
-        <summary>Voice settings</summary>
-        <div class="vgrid">
-          <label for="voiceSel">Voice<select id="voiceSel"></select></label>
-          <label for="rate">Speed <span id="rateV"></span><input type="range" id="rate" min="0.8" max="1.2" step="0.02" value="1"></label>
-          <button type="button" class="btn" id="testVoice">Test voice</button>
-          <small id="voiceNote"></small>
-        </div>
-      </details>
-    </div>
-    <div class="vside">
-      <div class="hh"><h2>Eltra</h2><small><button type="button" class="copy" id="stop" hidden>Stop</button><button type="button" class="copy" id="clear">New chat</button></small></div>
-      <div class="log" id="log" aria-live="polite"></div>
-      <div class="chips" id="chips">
-        <button type="button" data-say="Brief me on today and anything I need to deal with.">Brief me</button>
-        <button type="button" data-say="Which emails need a reply from me?">Emails to answer</button>
-        <button type="button" data-say="Tell me about my next appointment and draft a confirmation email to the customer.">Prep next visit</button>
-        <button type="button" data-say="Which leads need following up?">Leads to chase</button>
-        <button type="button" data-say="What jobs are booked this week?">Jobs this week</button>
-      </div>
-      <form class="ask" id="askForm"><input id="askIn" type="text" autocomplete="off" placeholder="Ask Eltra anything…" aria-label="Message"><button type="submit" class="btn" id="sendBtn">Send</button></form>
-    </div>
-  </section>
 
   <div class="cols">
     <section class="hud" aria-labelledby="calH">
@@ -356,6 +364,47 @@
     </section>
   </div>
 </main>
+<div class="dock" aria-label="Eltra">
+  <button type="button" class="orb" id="orb" data-state="idle" aria-label="Talk">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg>
+      </button>
+  <div class="dtext"><div><b>Eltra</b> <span id="vState" aria-live="polite">Ready</span></div><div id="vHint">Tap and talk. It sends when you stop.</div></div>
+  <button type="button" class="chatbtn" id="chatBtn" aria-label="Open chat" title="Chat"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12a8 8 0 0 1-11.6 7.1L4 20l1-4.6A8 8 0 1 1 21 12z"/></svg></button>
+</div>
+<button type="button" class="scrim" id="scrim" aria-label="Close panel" hidden></button>
+<aside class="drawer" id="chatDrawer" aria-label="Chat with Eltra" hidden>
+  <div class="dhead"><h2>Eltra</h2><span class="dtools"><button type="button" class="copy" id="stop" hidden>Stop</button><button type="button" class="copy" id="clear">New chat</button><button type="button" class="xbtn" data-close aria-label="Close chat">×</button></span></div>
+  <div class="log" id="log" aria-live="polite"></div>
+  <div class="chips" id="chips">
+        <button type="button" data-say="Brief me on today and anything I need to deal with.">Brief me</button>
+        <button type="button" data-say="Which emails need a reply from me?">Emails to answer</button>
+        <button type="button" data-say="Tell me about my next appointment and draft a confirmation email to the customer.">Prep next visit</button>
+        <button type="button" data-say="Which leads need following up?">Leads to chase</button>
+        <button type="button" data-say="What jobs are booked this week?">Jobs this week</button>
+      </div>
+  <form class="ask" id="askForm"><input id="askIn" type="text" autocomplete="off" placeholder="Ask Eltra anything…" aria-label="Message"><button type="submit" class="btn" id="sendBtn">Send</button></form>
+</aside>
+<aside class="drawer" id="setDrawer" aria-label="Settings" hidden>
+  <div class="dhead"><h2>Settings</h2><button type="button" class="xbtn" data-close aria-label="Close settings">×</button></div>
+  <div class="dbody">
+    <h3>Voice</h3>
+    <div class="vopts">
+        <label><input type="checkbox" id="speak" checked> Speak replies</label>
+        <label><input type="checkbox" id="convo"> Listen for my answer when Eltra asks something</label>
+        <label id="wakeRow"><input type="checkbox" id="wake"> Listen for “Eltra”</label>
+      </div>
+    <div class="vgrid">
+          <label for="voiceSel">Voice<select id="voiceSel"></select></label>
+          <label for="rate">Speed <span id="rateV"></span><input type="range" id="rate" min="0.8" max="1.2" step="0.02" value="1"></label>
+          <button type="button" class="btn" id="testVoice">Test voice</button>
+          <small id="voiceNote"></small>
+        </div>
+    <h3>Connections</h3>
+    <div class="sys" id="sys"></div>
+    <h3>Account</h3>
+    <button type="button" class="btn no" id="logout">Log out</button>
+  </div>
+</aside>
 </div>
 <div class="sleep" id="sleepView" hidden aria-live="polite">
   <div class="inner">

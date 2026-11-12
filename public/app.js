@@ -81,6 +81,8 @@
     var dot = function (on, label, link) { return '<span><i class="dot ' + (on === true ? 'on' : on === 'warn' ? 'warn' : '') + '"></i>' + label + '</span>'; };
     var googleDot = !g.setUp ? dot(false, 'Google') : !g.connected ? '<span><i class="dot warn"></i><a href="/.netlify/functions/google-auth?start=1">Connect Google</a></span>' : dot(D.calendar && D.calendar.error ? 'warn' : true, 'Google');
     $('sys').innerHTML = googleDot + dot(s.ghl, 'GoHighLevel') + dot(s.sm8, 'ServiceM8') + dot(s.voice, 'Voice');
+    var sl = systemsLine(), allUp = sl === 'All systems are up.';
+    $('sysPill').innerHTML = '<i class="dot ' + (allUp ? 'on' : 'warn') + '"></i><span>' + esc(allUp ? 'All systems up' : sl.replace(/^All systems are up, except (.*)\.$/, '$1 not connected')) + '</span>';
 
     // calendar
     if (!g.connected) { var msg = g.setUp ? 'Tap Connect Google at the top to load your calendar and email.' : 'Google isn’t set up yet. See SETUP.md.'; $('cal').innerHTML = $('mail').innerHTML = '<p class="note">' + msg + '</p>'; $('nextTitle').textContent = 'Calendar not connected'; setRing('--', 'not connected', 0); }
@@ -227,7 +229,7 @@
     api('agent', { method: 'POST', body: { messages: chat.messages, decisions: decisions } }).then(function (d) {
       if (aborted) return;
       chat.messages = d.messages || chat.messages;
-      if (d.state === 'approval') { chat.approvals = d.approvals; busy = false; steps = 0; persist(); render(); setState('idle', 'Awaiting OK'); speak('Needs your OK: ' + d.approvals.map(function (a) { return a.title; }).join(', and ') + '. Say approve or cancel.', true); return; }
+      if (d.state === 'approval') { chat.approvals = d.approvals; busy = false; steps = 0; persist(); render(); openDrawer('chat'); setState('idle', 'Awaiting OK'); speak('Needs your OK: ' + d.approvals.map(function (a) { return a.title; }).join(', and ') + '. Say approve or cancel.', true); return; }
       if (d.acted && d.acted.length) setTimeout(loadToday, 1500);
       if (d.state === 'continue' && steps++ < 12) { persist(); render(); step({}); return; }
       busy = false; steps = 0; persist();
@@ -235,11 +237,12 @@
       render();
       var last = chat.messages[chat.messages.length - 1];
       var text = last && last.role === 'assistant' ? (last.content || []).filter(function (c) { return c.type === 'text'; }).map(function (c) { return c.text; }).join(' ') : '';
+      if (text && !$('speak').checked) openDrawer('chat'); else if (text && $('chatDrawer').hidden) $('chatBtn').classList.add('has');
       if (text) speak(text, asksSomething(text)); else setState('idle', 'Ready');
     }).catch(function (e) {
       if (aborted) return;
       if (e.data && e.data.messages) chat.messages = e.data.messages;
-      busy = false; steps = 0; lastError = e.message; persist(); render(); setState('idle', 'Ready');
+      busy = false; steps = 0; lastError = e.message; persist(); render(); setState('idle', 'Ready'); openDrawer('chat');
     });
   }
   $('askForm').addEventListener('submit', function (e) { e.preventDefault(); armed = false; ask($('askIn').value); });
@@ -529,6 +532,20 @@
   $('sleepBtn').onclick = goSleep;
   $('wakeBtn').onclick = function () { wakeUp('wake up'); };
   document.addEventListener('visibilitychange', function () { if (!document.hidden && asleep) keepAwake(); });
+
+  // ================= drawers: chat and settings stay out of the way until needed =================
+  function openDrawer(which) {
+    var c = $('chatDrawer'), st = $('setDrawer');
+    c.hidden = which !== 'chat'; st.hidden = which !== 'settings'; $('scrim').hidden = false;
+    if (which === 'chat') { $('chatBtn').classList.remove('has'); var lg = $('log'); lg.scrollTop = lg.scrollHeight; }
+  }
+  function closeDrawers() { $('chatDrawer').hidden = true; $('setDrawer').hidden = true; $('scrim').hidden = true; }
+  $('chatBtn').onclick = function () { if ($('chatDrawer').hidden) openDrawer('chat'); else closeDrawers(); };
+  $('gearBtn').onclick = function () { openDrawer('settings'); };
+  $('sysPill').onclick = function () { openDrawer('settings'); };
+  $('scrim').onclick = closeDrawers;
+  document.querySelectorAll('[data-close]').forEach(function (b) { b.onclick = closeDrawers; });
+  document.addEventListener('keydown', function (e) { if (e.key === 'Escape') closeDrawers(); });
 
   // ================= start =================
   function startApp() {
