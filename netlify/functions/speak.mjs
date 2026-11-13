@@ -1,5 +1,7 @@
 // ElevenLabs voice. GET lists the voices on your ElevenLabs account; POST {text, voice_id} returns the spoken reply as MP3.
-// Needs ELEVENLABS_API_KEY. Optional: ELEVENLABS_VOICE_ID (default voice), ELEVENLABS_MODEL (default eleven_flash_v2_5; eleven_v4 / eleven_v4_turbo supported).
+// Needs ELEVENLABS_API_KEY. Optional: ELEVENLABS_VOICE_ID (default voice), ELEVENLABS_MODEL (default eleven_turbo_v2_5).
+// English is locked in and the delivery kept flat so the voice can't drift into other languages, shout or ramble.
+// Expressive models (eleven_v3 / eleven_v4) are ignored here because they swing in pitch and volume.
 import { json, guard } from '../lib/util.mjs';
 
 let voiceCache = null;
@@ -39,15 +41,18 @@ export default async (req) => {
   const speed = Math.max(0.7, Math.min(1.2, +b.speed || 1));
   // v4 models only take stability and similarity_boost; older models also take style, speaker boost and speed
   const settings = (model) => /^eleven_v4/.test(model)
-    ? { stability: 0.45, similarity_boost: 0.8 }
-    : { stability: 0.45, similarity_boost: 0.8, style: 0.1, use_speaker_boost: true, speed };
+    ? { stability: 0.8, similarity_boost: 0.75 }
+    : { stability: 0.8, similarity_boost: 0.75, style: 0, use_speaker_boost: false, speed };   // high stability, no style, no boost = even and calm
   const call = (model) => fetch(API + '/text-to-speech/' + voice + '?output_format=mp3_44100_128', {
     method: 'POST', headers: { 'xi-api-key': key, 'Content-Type': 'application/json', Accept: 'audio/mpeg' },
-    body: JSON.stringify({ text, model_id: model, voice_settings: settings(model) })
+    body: JSON.stringify({ text, model_id: model, voice_settings: settings(model), seed: 4242, apply_text_normalization: 'on',
+      ...(/v2_5|v4/.test(model) ? { language_code: 'en' } : {}) })
   });
-  const model = process.env.ELEVENLABS_MODEL || 'eleven_flash_v2_5';
+  let model = process.env.ELEVENLABS_MODEL || 'eleven_turbo_v2_5';
+  if (/^eleven_v[34]/.test(model)) model = 'eleven_turbo_v2_5';   // too expressive for an assistant
   let res = await call(model);
-  if ((res.status === 400 || res.status === 422) && model !== 'eleven_flash_v2_5') res = await call('eleven_flash_v2_5'); // model not available on this account
+  if ((res.status === 400 || res.status === 422) && model !== 'eleven_flash_v2_5') res = await call('eleven_flash_v2_5'); // model or option not available on this account
+  if (res.status === 400 || res.status === 422) res = await fetch(API + '/text-to-speech/' + voice + '?output_format=mp3_44100_128', { method: 'POST', headers: { 'xi-api-key': key, 'Content-Type': 'application/json', Accept: 'audio/mpeg' }, body: JSON.stringify({ text, model_id: 'eleven_flash_v2_5', voice_settings: { stability: 0.8, similarity_boost: 0.75, style: 0, use_speaker_boost: false } }) });
   if (!res.ok) {
     const t = await res.text().catch(() => '');
     let msg = t; try { const d = JSON.parse(t); msg = (d.detail && (d.detail.message || d.detail.status || d.detail)) || t; } catch {}

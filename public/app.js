@@ -266,6 +266,23 @@
     try { if ('speechSynthesis' in window) speechSynthesis.speak(new SpeechSynthesisUtterance('')); } catch (e) {}
   }
   function hush() { speaking = false; try { player.pause(); } catch (e) {} try { speechSynthesis.cancel(); } catch (e) {} }
+  // Say things the way a person would: units, money, symbols. Keeps the voice from tripping over them.
+  function sayable(t) {
+    return String(t)
+      .replace(/\$\s?(\d[\d,]*)(\.\d\d)?\b/g, function (m, d, c) { return d + (c && c !== '.00' ? ' dollars ' + c.slice(1) + ' cents' : ' dollars'); })
+      .replace(/(\d)\s?kWh\b/gi, '$1 kilowatt hours').replace(/(\d)\s?kW\b/gi, '$1 kilowatt').replace(/(\d)\s?MWh\b/g, '$1 megawatt hours')
+      .replace(/(\d)\s?c\/kWh\b/gi, '$1 cents per kilowatt hour').replace(/(\d)\s?%/g, '$1 percent')
+      .replace(/(\d)\s?km\b/gi, '$1 kilometres').replace(/(\d)\s?×\s?/g, '$1 times ')
+      .replace(/\bSTCs?\b/g, function (m) { return m === 'STCs' ? 'S T Cs' : 'S T C'; }).replace(/\bGHL\b/g, 'GoHighLevel').replace(/\bSM8\b/g, 'ServiceM8')
+      .replace(/\bVIC\b/g, 'Victoria').replace(/\be\.g\./gi, 'for example').replace(/\bi\.e\./gi, 'that is').replace(/&/g, ' and ')
+      .replace(/\s[–—-]\s/g, ', ').replace(/[#*_`>|~]/g, '').replace(/\s{2,}/g, ' ').trim();
+  }
+  // Long passages are where synthetic voices drift and garble: speak the first few sentences, the rest stays on screen.
+  function forVoice(t) {
+    t = String(t); if (t.length <= 600) return t;
+    var cut = t.slice(0, 600), end = Math.max(cut.lastIndexOf('. '), cut.lastIndexOf('? '), cut.lastIndexOf('! '));
+    return (end > 200 ? cut.slice(0, end + 1) : cut.replace(/\s+\S*$/, '') + '.') + ' The rest is on screen.';
+  }
   function clean(t) { return String(t).replace(/\*\*/g, '').replace(/^\s*[-•*]\s+/gm, '').replace(/https?:\/\/\S+/g, 'the link').slice(0, 1800); }
   function afterSpeech(fromReply) { speaking = false; quietUntil = Date.now() + 1800; if (busy) return; setState('idle', chat.approvals && chat.approvals.length ? 'Waiting for your OK' : 'Ready'); if (fromReply && $('convo').checked && canRecord) setTimeout(function () { if (!busy && !speaking) startListening(true); }, 250); }
   function speak(text, fromReply) {
@@ -273,7 +290,7 @@
     hush(); wakeStop(); lastSaid = String(text); quietUntil = Date.now() + 600000; speaking = true; setState('speaking', 'Speaking');
     var useEleven = voices && voices.configured && vs.engine !== 'device';
     if (!useEleven) return deviceSpeak(text, fromReply);
-    api('speak', { method: 'POST', body: { text: clean(text), voice_id: vs.voice || voices.default, speed: +$('rate').value || 1 }, raw: true })
+    api('speak', { method: 'POST', body: { text: forVoice(sayable(clean(text))), voice_id: vs.voice || voices.default, speed: +$('rate').value || 1 }, raw: true })
       .then(function (res) { return res.blob(); })
       .then(function (blob) {
         if (!speaking) return;
@@ -346,15 +363,26 @@
       if (!ac) ac = new (window.AudioContext || window.webkitAudioContext)();
       if (ac.state === 'suspended') ac.resume();
       var src = ac.createMediaStreamSource(s), an = ac.createAnalyser(); an.fftSize = 1024; src.connect(an);
-      var buf = new Uint8Array(an.fftSize), heard = false, quietSince = 0, startAt = Date.now(), floor = 0.012;
+      // Speech detection that adapts to the room: it learns the background level and listens for anything clearly above it.
+      // Float samples (not 8-bit) so quiet voices at a distance still register. Sensitivity is set in Settings.
+      var buf = new Float32Array(an.fftSize), heard = false, quietSince = 0, startAt = Date.now(), noise = 0, peak = 0;
+      var sens = { normal: 1, high: 0.7, max: 0.5 }[vs.sens || 'high'] || 0.7;
       vad = setInterval(function () {
-        an.getByteTimeDomainData(buf); var sum = 0; for (var i = 0; i < buf.length; i++) { var v = (buf[i] - 128) / 128; sum += v * v; }
+        an.getFloatTimeDomainData(buf); var sum = 0; for (var i = 0; i < buf.length; i++) sum += buf[i] * buf[i];
         var rms = Math.sqrt(sum / buf.length), now = Date.now();
-        orb.style.setProperty('--lvl', Math.min(14, rms * 120).toFixed(1) + 'px');
-        if (now - startAt < 300) { floor = Math.min(0.04, Math.max(floor, rms * 1.6)); if (rms > 0.06) heard = true; return; }
-        if (rms > Math.max(0.018, floor)) { heard = true; quietSince = 0; }
-        else if (heard) { if (!quietSince) quietSince = now; if (now - quietSince > 1400) stopListening(false); }
-        if (!heard && now - startAt > (followUp ? 6000 : 8000)) { noSpeech = true; stopListening(true); }
+        orb.style.setProperty('--lvl', Math.min(14, rms * 160).toFixed(1) + 'px');
+        if (now - startAt < 250) { noise = noise ? Math.min(noise, rms) : rms; return; }   // background, taken from the quietest moment
+        var gate = Math.max(0.006, Math.min(noise, 0.03) * 2.4) * sens;
+        peak = Math.max(peak, rms);
+        if (rms > gate) { heard = true; quietSince = 0; }
+        else {
+          noise = noise * 0.96 + rms * 0.04;   // keep learning the room while it's quiet
+          if (heard) { if (!quietSince) quietSince = now; if (now - quietSince > 1500) stopListening(false); }
+        }
+        if (!heard && now - startAt > (followUp ? 6000 : 8000)) {
+          if (peak > gate * 0.6) { heard = true; stopListening(false); }   // something faint was said: let transcription decide
+          else { noSpeech = true; stopListening(true); }
+        }
         if (now - startAt > 45000) stopListening(false);
       }, 80);
       recorder.start(250); listening = true; setState('listening', 'Listening');
@@ -424,6 +452,8 @@
   function wakeHint() { $('vHint').textContent = wakeOn ? 'Say “Eltra” and your question, or tap the mic.' : 'Tap and talk. It sends when you stop.'; }
   if (!WSR) { $('wakeRow').hidden = true; }
   $('wake').checked = wakeOn;
+  $('micSens').value = vs.sens || 'high';
+  $('micSens').onchange = function () { vs.sens = $('micSens').value; save('eltra-hud-voice', vs); };
   $('wake').onchange = function () { wakeOn = $('wake').checked && !!WSR; vs.wake = wakeOn; save('eltra-hud-voice', vs); if (!wakeOn) wakeStop(); else { unlockAudio(); wakeStart(); } wakeHint(); };
   wakeHint();
   setInterval(function () { if (wakeOn || asleep) wakeStart(); else wakeStop(); }, 1200);
