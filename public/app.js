@@ -211,7 +211,7 @@
   function asksSomething(t) { return /\?[\s"”’')]*$/.test(String(t).replace(/\s+$/, '')); }
   function ask(text) {
     wakeStop();
-    if (SLEEP_RE.test(String(text).replace(/\b(eltra|el tra|elta|electra|ultra|altra)\b[\s,.!?]*/gi, '').trim())) { goSleep(); return; }
+    var fw0 = findWake(text); if (SLEEP_RE.test((fw0 ? String(text).slice(fw0.end) : String(text)).trim())) { goSleep(); return; }
     text = String(text || '').trim(); if (!text || busy) return;
     unlockAudio(); hush();
     $('askIn').value = '';
@@ -416,6 +416,35 @@
   // "Eltra Energy" (the company) never counts as her name
   var WAKE = /\b(eltra|el tra|elltra|eltrah|elta|electra|ultra|altra)\b(?![\s,]*energy)[\s,.!?]*/i;
   var quietUntil = 0, lastSaid = '';
+  // Fuzzy match for the name. Speech services write "Eltra" as all sorts: ultra, altra, elta, electra, el tra, alter…
+  // A close word counts on its own; a looser one counts after "hey"/"hi"/"okay". "Eltra Energy" (the company) never does.
+  var WAKE_WORDS = ['eltra', 'eltrah', 'elltra', 'eltre', 'eltro', 'ultra', 'altra', 'oltra', 'iltra', 'elta', 'electra', 'eltron', 'elter', 'alter', 'eltera', 'eltrar'];
+  function lev(a, b) {
+    var d = []; for (var x = 0; x <= a.length; x++) { d[x] = [x]; } for (var y = 0; y <= b.length; y++) d[0][y] = y;
+    for (x = 1; x <= a.length; x++) for (y = 1; y <= b.length; y++) d[x][y] = Math.min(d[x - 1][y] + 1, d[x][y - 1] + 1, d[x - 1][y - 1] + (a[x - 1] === b[y - 1] ? 0 : 1));
+    return d[a.length][b.length];
+  }
+  function findWake(t) {
+    var re = /[A-Za-z']+/g, w, words = [];
+    while ((w = re.exec(String(t)))) words.push({ s: w[0].toLowerCase().replace(/'/g, ''), i: w.index, end: w.index + w[0].length });
+    for (var k = 0; k < words.length; k++) {
+      var cur = words[k], nxt = words[k + 1], prev = words[k - 1], joined = nxt ? cur.s + nxt.s : '';
+      var cand = [{ s: cur.s, end: cur.end }]; if (nxt && /^(el|l|elle|al|ell)$/.test(cur.s)) cand.push({ s: joined, end: nxt.end });
+      for (var c = 0; c < cand.length; c++) {
+        var x = cand[c].s, after = words.slice(k + 1).find(function (q) { return q.i >= cand[c].end; });
+        if (after && after.s === 'energy') continue;
+        var greeted = prev && /^(hey|hi|hay|okay|ok|oi|yo|morning|evening)$/.test(prev.s);
+        var everyday = /^(ultra|alter|elter|electra)$/.test(x) && !greeted && k > 0;   // real English words only count at the start or after "hey"
+        if (!everyday && (WAKE_WORDS.indexOf(x) >= 0 || (x.length >= 4 && lev(x, 'eltra') <= 1) || (greeted && x.length >= 4 && lev(x, 'eltra') <= 2))) {
+          var endPos = cand[c].end; while (/[\s,.!?]/.test(String(t).charAt(endPos))) endPos++;
+          return { index: cur.i, end: endPos };
+        }
+      }
+    }
+    return null;
+  }
+  var heardTimer = null;
+  function lastHeard(t) { var el = $('wakeHeard'); if (!el || !t) return; el.textContent = 'Last heard: “' + String(t).trim().slice(0, 80) + '”'; clearTimeout(heardTimer); heardTimer = setTimeout(function () { el.textContent = ''; }, 15000); }
   // ignore anything that is just an echo of what she said in the last few seconds
   function echoOfHer(t) {
     if (Date.now() - quietUntil > 6000 || !lastSaid) return false;
@@ -428,13 +457,16 @@
     if (!(wakeOn || asleep) || wakeRec || busy || speaking || listening || document.hidden || Date.now() < quietUntil) return;
     var r, fired = false;
     try { r = new WSR(); } catch (e) { return; }
-    r.lang = 'en-AU'; r.continuous = true; r.interimResults = true;
+    r.lang = 'en-AU'; r.continuous = true; r.interimResults = true; r.maxAlternatives = 5;
     r.onresult = function (e) {
       if (fired) return;
       for (var i = e.resultIndex; i < e.results.length; i++) {
-        var t = e.results[i][0].transcript, m = t.match(WAKE);
+        // the speech service has never heard of "Eltra", so check every guess it offers, not just the top one
+        var t = null, m = null;
+        for (var a = 0; a < e.results[i].length && !m; a++) { t = e.results[i][a].transcript; m = findWake(t); }
+        lastHeard(e.results[i][0].transcript);
         if (!m || echoOfHer(t)) continue;
-        var rest = t.slice(m.index + m[0].length).trim();
+        var rest = t.slice(m.end).trim();
         if (asleep) { if (!e.results[i].isFinal) continue; fired = true; wakeStop(); wakeUp(t); return; }
         if (!e.results[i].isFinal) { setState('listening', 'Yes?'); continue; }
         fired = true; wakeStop();
@@ -544,7 +576,7 @@
     $('sleepView').hidden = true; document.body.style.overflow = '';
     loadToday();
     // whatever came after the greeting ("hey Eltra, I'm home, what's on tomorrow?") becomes the first question
-    var rest = String(said || '').replace(/^.*?\b(eltra|el tra|elltra|eltrah|elta|electra|ultra|altra)\b[\s,.!?]*/i, '')
+    var fw = findWake(said), rest = String(said || '').slice(fw ? fw.end : 0)
       .replace(/^(i'?m|im|i am) (home|back)[\s,.!?]*/i, '').replace(/^(wake up|you there\??|are you there\??|hello|hi|hey)[\s,.!?]*/i, '').trim();
     var notes = [523.25, 659.25, 783.99], gap = calm ? 0 : 320;
     [0, 1, 2].forEach(function (k) { setTimeout(function () { bars[k].classList.add('on'); chime([notes[k]], 0, 0.45); }, 200 + k * gap); });

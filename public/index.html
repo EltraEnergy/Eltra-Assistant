@@ -275,6 +275,7 @@
   .dbody h3 { margin: 16px 0 0; font-size: 15px; color: var(--muted); font-weight: 600; }
   .dbody .vopts { gap: 12px; }
   .dbody .vopts label { font-size: 15.5px; }
+  .heard { font-size: 13px; color: var(--muted); min-height: 1em; }
   .dbody .vgrid { margin: 0; }
   .dbody .sys { display: grid; }
   .dbody .sys > span { display: flex; align-items: center; padding: 10px 0; border-bottom: 1px solid var(--line); font-size: 15.5px; }
@@ -392,6 +393,7 @@
         <label><input type="checkbox" id="speak" checked> Speak replies</label>
         <label><input type="checkbox" id="convo"> Listen for my answer when Eltra asks something</label>
         <label id="wakeRow"><input type="checkbox" id="wake"> Listen for “Eltra”</label>
+        <small id="wakeHeard" class="heard" aria-live="polite"></small>
       </div>
     <div class="vgrid">
           <label for="voiceSel">Voice<select id="voiceSel"></select></label>
