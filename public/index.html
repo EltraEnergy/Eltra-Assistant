@@ -290,6 +290,13 @@
     .hright .clock { display: none; }
   }
 
+  /* browser task card */
+  .card.task { border-color: var(--blue-line); background: #F5F9FF; }
+  .card.task .ch { color: var(--blue); }
+  .card.task .miss { margin-top: 6px; font-size: 14px; color: var(--amber); }
+  .card.task .miss.ok { color: var(--green); }
+  .card.task details { margin-top: 8px; font-size: 14px; } .card.task summary { cursor: pointer; color: var(--blue); font-weight: 600; }
+  .card.task a.btn { display: inline-flex; align-items: center; text-decoration: none; }
   /* to-do list */
   .tsecs { display: flex; flex-wrap: wrap; gap: 6px; padding: 12px 0 10px; }
   .tsecs button { font: inherit; font-size: 14px; font-weight: 600; color: var(--muted); background: var(--paper); border: 0; border-radius: 999px; padding: 6px 12px; min-height: 36px; cursor: pointer; }
@@ -440,6 +447,10 @@
           <button type="button" class="btn" id="testVoice">Test voice</button>
           <small id="voiceNote"></small>
         </div>
+    <h3>DNSP portals</h3>
+    <p class="vhint" style="max-width:none; text-align:left">The page you log in to for each distributor. Eltra adds an “Open portal” button to pre-approval and commissioning tasks.</p>
+    <div class="vgrid" id="portalList"></div>
+    <div style="display:flex; gap:10px; align-items:center"><button type="button" class="btn no" id="savePortals">Save portal links</button><span class="vhint" id="portalMsg" style="text-align:left"></span></div>
     <h3>Connections</h3>
     <div class="sys" id="sys"></div>
     <h3>Account</h3>

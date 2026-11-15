@@ -152,7 +152,7 @@
   var CHAT = 'eltra-hud-chat-v1';
   var chat = load(CHAT, null) || { messages: [], approvals: null, results: {}, decided: {} };
   var busy = false, lastError = null, steps = 0, aborted = false;
-  var LABELS = { gmail_search: 'Searching email', gmail_read: 'Reading email', gmail_create_draft: 'Drafting email', gmail_send_draft: 'Sending email', gmail_archive: 'Archiving email', gmail_save_attachments: 'Saving attachments', calendar_events: 'Checking calendar', calendar_create_event: 'Adding to calendar', drive_search: 'Searching Drive', sheets_read: 'Reading sheet', pylon_find_projects: 'Checking Pylon', pylon_project: 'Opening Pylon project', pylon_create_project: 'Setting up Pylon project', pylon_new_project_link: 'Making Pylon link', drive_read_file: 'Reading file', todo_list: 'Checking to-dos', todo_add: 'Adding to-do', todo_update: 'Updating to-do', pylon_preapproval_pack: 'Building pre-approval pack', drive_list_folder: 'Opening folder', drive_move: 'Moving files', drive_create_folder: 'Creating folder', drive_rename: 'Renaming', ghl_pipelines: 'Checking pipeline', ghl_search_opportunities: 'Looking up leads', ghl_search_contacts: 'Looking up contacts', ghl_move_opportunity: 'Updating lead', ghl_add_note: 'Adding note', ghl_add_task: 'Adding task', sm8_jobs: 'Looking up jobs', sm8_schedule: 'Checking schedule', sm8_add_job_note: 'Adding job note', sm8_create_job: 'Creating job' };
+  var LABELS = { gmail_search: 'Searching email', gmail_read: 'Reading email', gmail_create_draft: 'Drafting email', gmail_send_draft: 'Sending email', gmail_archive: 'Archiving email', gmail_save_attachments: 'Saving attachments', calendar_events: 'Checking calendar', calendar_create_event: 'Adding to calendar', drive_search: 'Searching Drive', sheets_read: 'Reading sheet', pylon_find_projects: 'Checking Pylon', pylon_project: 'Opening Pylon project', pylon_create_project: 'Setting up Pylon project', pylon_new_project_link: 'Making Pylon link', drive_read_file: 'Reading file', todo_list: 'Checking to-dos', todo_add: 'Adding to-do', todo_update: 'Updating to-do', dnsp_task_pack: 'Preparing the DNSP task', read_document: 'Reading document', drive_list_folder: 'Opening folder', drive_move: 'Moving files', drive_create_folder: 'Creating folder', drive_rename: 'Renaming', ghl_pipelines: 'Checking pipeline', ghl_search_opportunities: 'Looking up leads', ghl_search_contacts: 'Looking up contacts', ghl_move_opportunity: 'Updating lead', ghl_add_note: 'Adding note', ghl_add_task: 'Adding task', sm8_jobs: 'Looking up jobs', sm8_schedule: 'Checking schedule', sm8_add_job_note: 'Adding job note', sm8_create_job: 'Creating job' };
   function persist() { save(CHAT, chat); }
   function md(t) {
     var out = '', inList = false;
@@ -164,11 +164,26 @@
     });
     return out + (inList ? '</ul>' : '');
   }
+  var taskCards = [];
   function render() {
-    var h = '';
+    var h = ''; taskCards = [];
     if (!chat.messages.length) h = '<div class="empty">Ask about your day, your email, a customer or a job</div>';
     chat.messages.forEach(function (m) {
-      if (m.role === 'user') { if (typeof m.content === 'string') h += '<div class="m you">' + esc(m.content) + '</div>'; return; }
+      if (m.role === 'user') {
+        if (typeof m.content === 'string') { h += '<div class="m you">' + esc(m.content) + '</div>'; return; }
+        (m.content || []).forEach(function (c) {
+          if (c.type !== 'tool_result' || typeof c.content !== 'string' || c.content.indexOf('"browser_task"') < 0) return;
+          var bt; try { bt = JSON.parse(c.content).browser_task; } catch (e) { return; }
+          if (!bt) return;
+          var key = 'bt' + (taskCards.push(bt) - 1);
+          h += '<div class="card task"><div class="ch">For Claude in Chrome</div><div><b>' + esc(bt.title) + '</b>' + (bt.distributor ? ' · ' + esc(bt.distributor) : '') + '</div>' +
+            (bt.missing && bt.missing.length ? '<div class="miss">Still needed: ' + bt.missing.map(esc).join(', ') + '</div>' : '<div class="miss ok">Everything the pack needs is filled in.</div>') +
+            '<details><summary>Show the instruction</summary><pre>' + esc(bt.instruction) + '</pre></details>' +
+            '<div class="row"><button type="button" class="btn" data-taskcopy="' + key + '">Copy for Claude in Chrome</button>' +
+            (bt.portal_url ? '<a class="btn no" href="' + esc(bt.portal_url) + '" target="_blank" rel="noopener">Open ' + esc(bt.distributor || 'portal') + ' portal</a>' : '<button type="button" class="btn no" data-portals>Add ' + esc(bt.distributor || 'portal') + ' link</button>') + '</div></div>';
+        });
+        return;
+      }
       (m.content || []).forEach(function (c) {
         if (c.type === 'text' && c.text.trim()) h += '<div class="m ai">' + md(c.text) + '</div>';
         else if (c.type === 'tool_use') {
@@ -189,6 +204,15 @@
     $('sendBtn').disabled = busy; $('stop').hidden = !busy;
   }
   $('log').addEventListener('click', function (e) {
+    var cp = e.target.closest('[data-taskcopy]');
+    if (cp) {
+      e.stopPropagation();
+      var bt = taskCards[+cp.dataset.taskcopy.slice(2)]; if (!bt) return;
+      var done = function () { var old = cp.textContent; cp.textContent = 'Copied ✓'; setTimeout(function () { cp.textContent = old; }, 2000); };
+      if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(bt.instruction).then(done, function () { fallbackCopy(bt.instruction); done(); }); else { fallbackCopy(bt.instruction); done(); }
+      return;
+    }
+    if (e.target.closest('[data-portals]')) { openDrawer('settings'); setTimeout(function () { var f = document.querySelector('#portalList input'); if (f) f.focus(); }, 400); return; }
     var ok = e.target.closest('[data-ok]'), no = e.target.closest('[data-no]'); if (!ok && !no) return;
     unlockAudio();
     var id = (ok || no).dataset.ok || (ok || no).dataset.no, a = (chat.approvals || []).filter(function (x) { return x.id === id; })[0]; if (!a) return;
@@ -606,6 +630,7 @@
   function openDrawer(which) {
     var c = $('chatDrawer'), st = $('setDrawer');
     c.hidden = which !== 'chat'; st.hidden = which !== 'settings'; $('scrim').hidden = false;
+    if (which === 'settings') loadPortals();
     if (which === 'chat') { $('chatBtn').classList.remove('has'); var lg = $('log'); lg.scrollTop = lg.scrollHeight; }
   }
   function closeDrawers() { $('chatDrawer').hidden = true; $('setDrawer').hidden = true; $('scrim').hidden = true; }
@@ -615,6 +640,25 @@
   $('scrim').onclick = closeDrawers;
   document.querySelectorAll('[data-close]').forEach(function (b) { b.onclick = closeDrawers; });
   document.addEventListener('keydown', function (e) { if (e.key === 'Escape') closeDrawers(); });
+
+  function fallbackCopy(t) { var ta = document.createElement('textarea'); ta.value = t; ta.style.position = 'fixed'; ta.style.opacity = '0'; document.body.appendChild(ta); ta.select(); try { document.execCommand('copy'); } catch (e) {} ta.remove(); }
+
+  // ================= DNSP portal links (Settings) =================
+  function loadPortals() {
+    return api('prefs').then(function (p) {
+      var box = $('portalList'); box.textContent = '';
+      Object.keys(p.portals || {}).forEach(function (n) {
+        var l = document.createElement('label'); l.textContent = n;
+        var i = document.createElement('input'); i.type = 'url'; i.placeholder = 'https://… (the page you log in to)'; i.value = p.portals[n] || ''; i.dataset.dnsp = n;
+        l.appendChild(i); box.appendChild(l);
+      });
+    }).catch(function () {});
+  }
+  $('savePortals').onclick = function () {
+    var portals = {}; document.querySelectorAll('#portalList [data-dnsp]').forEach(function (i) { portals[i.dataset.dnsp] = i.value.trim(); });
+    $('portalMsg').textContent = 'Saving…';
+    api('prefs', { method: 'POST', body: { portals: portals } }).then(function () { $('portalMsg').textContent = 'Saved'; loadPortals(); }).catch(function (e) { $('portalMsg').textContent = e.message; });
+  };
 
   // ================= to-do list =================
   var todos = { sections: [], items: [] }, todoTab = 'All', showDone = false;

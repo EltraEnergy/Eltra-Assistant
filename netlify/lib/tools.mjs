@@ -1,6 +1,7 @@
 // The agent's tools. "action" tools change something (send, move, create) and only run after Will taps Approve.
-import { g, GMAIL, CAL, DRIVE, DRIVE_UP } from './google.mjs';
+import { g, GMAIL, CAL, DRIVE, DRIVE_UP, accessToken } from './google.mjs';
 import { loadTodos, addTodo, updateTodo } from './todos.mjs';
+import { loadPrefs, portalFor } from './prefs.mjs';
 import { tz, clip, melbToDate, melbToday } from './util.mjs';
 
 // ---------------- helpers ----------------
@@ -576,45 +577,109 @@ tool({
   async run({ id, ...patch }) { const it = await updateTodo(id, patch); return { updated: it }; }
 });
 
-// ---------- DNSP pre-approval pack (filled in a browser by Will or Claude in Chrome) ----------
+// ---------- Read a power bill, CES or other PDF/photo (Drive file or email attachment) ----------
+const DOC_FIELDS = {
+  bill: { customer_name: 'account holder name', supply_address: 'supply / site address', nmi: 'NMI (10 or 11 characters)', meter_number: 'meter number(s)', retailer: 'energy retailer', distributor: 'distribution network (Powercor, CitiPower, Jemena, AusNet Services or United Energy), from the bill or worked out from the NMI', phases: 'single or three phase if shown', tariff: 'tariff name', solar_feed_in: 'true if there is an existing solar feed-in on the bill' },
+  ces: { ces_number: 'Certificate of Electrical Safety number', completion_date: 'date the work was completed, YYYY-MM-DD', site_address: 'address of the work', customer_name: 'customer / owner name', electrician: 'licensed electrician name and licence number', work_description: 'short description of the work', inverter: 'inverter make, model and serial number(s) if listed', battery: 'battery make, model and serial number(s) if listed', solar: 'panel make/model/quantity or kW if listed', export_limit: 'export limit if listed', test_results_ok: 'true if the tests shown passed' },
+  other: { document_type: 'what the document is', key_details: 'the important names, numbers, dates and amounts, as short "label: value" lines' }
+};
+async function claudeModel(key) {
+  if (process.env.ANTHROPIC_MODEL) return process.env.ANTHROPIC_MODEL;
+  const r = await fetch('https://api.anthropic.com/v1/models?limit=100', { headers: { 'x-api-key': key, 'anthropic-version': '2023-06-01' } });
+  const d = await r.json().catch(() => ({})), ids = (d.data || []).map((m) => m.id);
+  return ids.find((x) => /sonnet/.test(x)) || ids.find((x) => /opus/.test(x)) || ids[0];
+}
 tool({
-  name: 'pylon_preapproval_pack', group: 'pylon',
-  description: 'Build a DNSP pre-approval pack for a Pylon project: every detail the distributor portal asks for (customer, site, NMI, meter, retailer, phases, panels, inverter, battery, export request), a list of anything missing, and a ready instruction Will can paste into Claude in Chrome to fill the portal and stop before submitting. Uses the signed design if there is one, otherwise the primary design.',
-  input_schema: { type: 'object', properties: { project_id: { type: 'string' }, export_limit_kw: { type: 'number', description: 'export limit to request, if Will said' }, distributor: { type: 'string', description: 'if Will said, e.g. Powercor' } }, required: ['project_id'] },
-  async run({ project_id, export_limit_kw, distributor }) {
-    const p = await pylon('/solar_projects/' + encodeURIComponent(project_id));
+  name: 'read_document', group: 'google',
+  description: 'Read a PDF or photo and pull out the details: kind "bill" (power bill: NMI, meter number, retailer, distributor, account name, address), kind "ces" (Certificate of Electrical Safety: CES number, completion date, serial numbers, electrician) or "other". Give a Drive file_id (find it with drive_search, e.g. in the customer\'s Customer Quotes folder) or a Gmail message_id plus the attachment filename. Use this to fill DNSP pre-approval and commissioning packs instead of asking Will.',
+  input_schema: { type: 'object', properties: { kind: { type: 'string', enum: ['bill', 'ces', 'other'] }, file_id: { type: 'string' }, message_id: { type: 'string' }, filename: { type: 'string' } }, required: ['kind'] },
+  async run({ kind, file_id, message_id, filename }) {
+    const key = process.env.ANTHROPIC_API_KEY; if (!key) throw new Error('ANTHROPIC_API_KEY is not set');
+    let b64, mime, name;
+    if (file_id) {
+      const meta = await g(DRIVE + '/files/' + encodeURIComponent(file_id) + '?supportsAllDrives=true&fields=name,mimeType,size');
+      if (+meta.size > 15e6) throw new Error('That file is too big to read (over 15 MB)');
+      const res = await fetch(DRIVE + '/files/' + encodeURIComponent(file_id) + '?alt=media&supportsAllDrives=true', { headers: { Authorization: 'Bearer ' + (await accessToken()) } });
+      if (!res.ok) throw new Error('Could not download that file from Drive (' + res.status + ')');
+      b64 = Buffer.from(await res.arrayBuffer()).toString('base64'); mime = meta.mimeType; name = meta.name;
+    } else if (message_id) {
+      const m = await g(GMAIL + '/messages/' + encodeURIComponent(message_id) + '?format=full');
+      const atts = attachments(m.payload).filter((a) => /pdf|image\//.test(a.mime_type));
+      const a = (filename && atts.find((x) => x.filename === filename)) || atts[0];
+      if (!a) throw new Error('That email has no PDF or image attachment');
+      const d = await g(GMAIL + '/messages/' + m.id + '/attachments/' + a.attachment_id);
+      b64 = String(d.data).replace(/-/g, '+').replace(/_/g, '/'); mime = a.mime_type; name = a.filename;
+    } else throw new Error('Give a Drive file_id or an email message_id');
+    const isPdf = /pdf/.test(mime), isImg = /^image\/(jpeg|png|gif|webp)$/.test(mime);
+    if (!isPdf && !isImg) return { name, note: 'Can only read PDFs and JPEG/PNG photos (this is ' + mime + ').' };
+    const fields = DOC_FIELDS[kind] || DOC_FIELDS.other, props = {};
+    Object.keys(fields).forEach((k) => { props[k] = { type: ['string', 'null'], description: fields[k] }; });
+    const model = await claudeModel(key);
+    const res = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST', headers: { 'x-api-key': key, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
+      body: JSON.stringify({ model, max_tokens: 1500, tools: [{ name: 'details', description: 'Details read from the document', input_schema: { type: 'object', properties: props } }], tool_choice: { type: 'tool', name: 'details' },
+        messages: [{ role: 'user', content: [
+          isPdf ? { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: b64 } } : { type: 'image', source: { type: 'base64', media_type: mime, data: b64 } },
+          { type: 'text', text: 'Read this ' + (kind === 'bill' ? 'Australian electricity bill' : kind === 'ces' ? 'Victorian Certificate of Electrical Safety' : 'document') + ' and fill in the details. Copy numbers exactly as printed. Use null for anything not shown; never guess.' }
+        ] }] })
+    });
+    const out = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error('Could not read the document: ' + ((out.error && out.error.message) || res.status));
+    const t = (out.content || []).find((c) => c.type === 'tool_use');
+    return { file: name, kind, details: t ? t.input : null };
+  }
+});
+
+// ---------- DNSP browser tasks: pre-approval and commissioning (filled in by Claude in Chrome) ----------
+tool({
+  name: 'dnsp_task_pack', group: 'pylon',
+  description: 'Prepare a DNSP portal task for a Pylon project, ready for Will to hand to Claude in Chrome: task "preapproval" (solar/battery pre-approval application) or "commissioning" (notify the distributor the system is installed and the inverter is commissioned). Pulls the customer, site, NMI, meter, retailer, phases and system (signed design, else primary) from Pylon, lists anything missing, and returns the Chrome instruction plus the distributor portal link. Before calling it, gather the details yourself: find the customer\'s power bill (their Customer Quotes folder in Drive, or an email from them) and read it with read_document kind "bill" for NMI, meter number, retailer and distributor; for commissioning also find the CES (Drive or email) and read it with kind "ces" for the CES number, completion date and serial numbers. Pass everything you found as the inputs below, plus anything Will tells you. Only ask Will for what you could not find. The dashboard shows Copy and Open portal buttons, so just summarise and flag what is still missing.',
+  input_schema: { type: 'object', properties: {
+    project_id: { type: 'string' }, task: { type: 'string', enum: ['preapproval', 'commissioning'] },
+    distributor: { type: 'string' }, export_limit_kw: { type: 'number' },
+    nmi: { type: 'string' }, meter_number: { type: 'string' }, retailer: { type: 'string' }, phases: { type: 'string', description: 'single or three' },
+    preapproval_number: { type: 'string' }, install_date: { type: 'string', description: 'YYYY-MM-DD the install was completed' },
+    inverter_serials: { type: 'string' }, battery_serials: { type: 'string' }, ces_number: { type: 'string', description: 'Certificate of Electrical Safety number' }
+  }, required: ['project_id', 'task'] },
+  async run(i) {
+    const p = await pylon('/solar_projects/' + encodeURIComponent(i.project_id));
     const a = p.data.attributes || {}, site = a.site_details || {}, cust = a.customer_details || {}, proj = pylonProject(p.data);
-    const ds = await pylon('/solar_designs?filter[project]=' + encodeURIComponent(project_id) + '&fields[solar_designs]=' + DESIGN_FIELDS).catch(() => ({ data: [] }));
+    const ds = await pylon('/solar_designs?filter[project]=' + encodeURIComponent(i.project_id) + '&fields[solar_designs]=' + DESIGN_FIELDS).catch(() => ({ data: [] }));
     const designs = (ds.data || []).map(pylonDesign);
     const d = designs.find((x) => x.id === proj.signed_design_id) || designs.find((x) => x.primary) || designs[0] || null;
-    const dnsp = distributor || site.energy_distributor || '';
-    const pack = {
-      customer: { name: cust.name || '', phone: cust.phone || '', email: cust.email || '' },
-      site: { address: proj.address || '', nmi: site.nmi || '', meter_number: site.meter_number || '', retailer: site.energy_retailer || '', distributor: dnsp,
-        phases: site.power_phases || '', storeys: site.number_of_storeys || '', roof_type: site.roof_type || '', existing_preapproval: site.dnsp_preapproval_number || '' },
-      system: d ? { design: d.title, solar_kw_dc: d.solar_kw, panels: d.panels, inverters: d.inverters, battery: d.batteries, battery_kwh: d.battery_kwh, signed: proj.signed } : null,
-      export_limit_requested_kw: export_limit_kw || null,
-      installer: { company: 'Eltra Energy' }
-    };
+    // details read from the bill / CES (or given by Will) win over blanks in Pylon
+    if (i.nmi) site.nmi = i.nmi; if (i.meter_number) site.meter_number = i.meter_number; if (i.retailer) site.energy_retailer = i.retailer;
+    const prefs = await loadPrefs(), portal = portalFor(prefs, i.distributor || site.energy_distributor);
+    const phases = (i.phases ? String(i.phases).replace(/ ?phase$/i, '') : '') || { one: 'single', two: 'two', three: 'three', split: 'split' }[site.power_phases] || site.power_phases || '';
+    const pre = i.preapproval_number || site.dnsp_preapproval_number || '';
+    const commissioning = i.task === 'commissioning';
     const missing = [];
-    if (!pack.site.nmi) missing.push('NMI (on the electricity bill)');
-    if (!pack.site.meter_number) missing.push('meter number');
-    if (!pack.site.retailer) missing.push('energy retailer');
-    if (!dnsp) missing.push('distributor (Powercor, CitiPower, Jemena, AusNet or United Energy)');
-    if (!pack.site.phases) missing.push('number of phases');
-    if (!d) missing.push('a design in Pylon');
-    else { if (!d.inverters.length) missing.push('inverter model'); if (!d.panels.length && d.solar_kw) missing.push('panel model'); }
-    if (!export_limit_kw) missing.push('export limit to request');
+    if (!site.nmi) missing.push('NMI');
+    if (!portal.name) missing.push('distributor');
+    if (!d) missing.push('a design in Pylon'); else if (!d.inverters.length) missing.push('inverter model');
+    if (!commissioning) { if (!site.meter_number) missing.push('meter number'); if (!site.energy_retailer) missing.push('retailer'); if (!phases) missing.push('phases'); if (!i.export_limit_kw) missing.push('export limit to request'); }
+    else { if (!pre) missing.push('pre-approval reference number'); if (!i.install_date) missing.push('install completion date'); if (!i.inverter_serials) missing.push('inverter serial number(s)'); if (d && d.battery_kwh && !i.battery_serials) missing.push('battery serial number(s)'); if (!i.ces_number) missing.push('CES number'); if (!i.export_limit_kw) missing.push('export limit set on the inverter'); }
+    const sys = d ? d.solar_kw + ' kW DC solar' + (d.panels.length ? ' (' + d.panels.join('; ') + ')' : '') + (d.inverters.length ? ', inverter ' + d.inverters.join('; ') : '') + (d.battery_kwh ? ', battery ' + (d.batteries.join('; ') || '') + ' ' + d.battery_kwh + ' kWh' : '') : '[no design yet]';
     const lines = [
-      'Go to the ' + (dnsp || '[distributor]') + ' connections portal (I am logged in) and start a new solar' + (d && d.battery_kwh ? ' and battery' : '') + ' pre-approval / embedded generation application with these details:',
+      'Go to the ' + (portal.name || '[distributor]') + ' connections portal (I am logged in) and ' + (commissioning
+        ? 'complete the post-installation / commissioning notification for this solar' + (d && d.battery_kwh ? ' and battery' : '') + ' system (installation completed, inverter commissioned):'
+        : 'start a new solar' + (d && d.battery_kwh ? ' and battery' : '') + ' pre-approval / embedded generation application with these details:'),
       'Customer: ' + [cust.name, cust.phone, cust.email].filter(Boolean).join(', '),
-      'Site: ' + (proj.address || '[address]') + (site.nmi ? ' · NMI ' + site.nmi : ' · NMI [missing]') + (site.meter_number ? ' · meter ' + site.meter_number : '') + (site.energy_retailer ? ' · retailer ' + site.energy_retailer : '') + (site.power_phases ? ' · ' + ({ one: 'single', two: 'two', three: 'three', split: 'split' }[site.power_phases] || site.power_phases) + ' phase' : ''),
-      d ? 'System: ' + d.solar_kw + ' kW DC solar' + (d.panels.length ? ' (' + d.panels.join('; ') + ')' : '') + (d.inverters.length ? ', inverter ' + d.inverters.join('; ') : '') + (d.battery_kwh ? ', battery ' + (d.batteries.join('; ') || '') + ' ' + d.battery_kwh + ' kWh' : '') : 'System: [no design yet]',
-      'Export limit requested: ' + (export_limit_kw ? export_limit_kw + ' kW' : '[confirm with Will]'),
+      'Site: ' + (proj.address || '[address]') + ' · NMI ' + (site.nmi || '[missing]') + (site.meter_number ? ' · meter ' + site.meter_number : '') + (site.energy_retailer ? ' · retailer ' + site.energy_retailer : '') + (phases ? ' · ' + phases + ' phase' : ''),
+      'System: ' + sys,
+      commissioning ? 'Pre-approval reference: ' + (pre || '[ask Will]') : null,
+      commissioning ? 'Installation completed: ' + (i.install_date || '[ask Will]') : null,
+      commissioning ? 'Inverter serial number(s): ' + (i.inverter_serials || '[ask Will]') + (d && d.battery_kwh ? ' · Battery serial number(s): ' + (i.battery_serials || '[ask Will]') : '') : null,
+      commissioning ? 'Inverter set to AS/NZS 4777.2 Australia A region settings.' : null,
+      commissioning ? 'Certificate of Electrical Safety number: ' + (i.ces_number || '[ask Will]') : null,
+      (commissioning ? 'Export limit set on the inverter: ' : 'Export limit requested: ') + (i.export_limit_kw ? i.export_limit_kw + ' kW' : '[confirm with Will]'),
       'Installer company: Eltra Energy. Use the installer and accreditation details already saved in the portal.',
-      'Fill in every field you can, tell me about anything the form asks for that is not listed here, and STOP before submitting so I can check it.'
-    ];
-    return { pack, missing, chrome_instruction: lines.join('\n'), note: 'Show Will the missing items first. Offer to add a DNSP to-do to lodge it.' };
+      'Fill in every field you can. If the form asks for something not listed here (photos, documents, other numbers), list it for me. STOP before submitting so I can check it.'
+    ].filter(Boolean);
+    return {
+      browser_task: { title: (commissioning ? 'Commissioning notice' : 'Pre-approval') + ' – ' + (cust.name || proj.address || 'customer'), distributor: portal.name, portal_url: portal.url, instruction: lines.join('\n'), missing },
+      missing, note: 'The dashboard shows a card with Copy and Open portal buttons. Tell Will what is missing in one or two lines; offer a DNSP to-do.' + (portal.name && !portal.url ? ' No portal link is saved for ' + portal.name + ' yet: Will can add it under Settings > DNSP portals.' : '')
+    };
   }
 });
 
