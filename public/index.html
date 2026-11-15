@@ -289,6 +289,29 @@
     .dtext { flex: 1; max-width: none; }
     .hright .clock { display: none; }
   }
+
+  /* to-do list */
+  .tsecs { display: flex; flex-wrap: wrap; gap: 6px; padding: 12px 0 10px; }
+  .tsecs button { font: inherit; font-size: 14px; font-weight: 600; color: var(--muted); background: var(--paper); border: 0; border-radius: 999px; padding: 6px 12px; min-height: 36px; cursor: pointer; }
+  .tsecs button[aria-selected="true"] { background: var(--blue-soft); color: var(--blue); }
+  .tsecs button .n { margin-left: 6px; font-size: 12.5px; color: inherit; opacity: .75; }
+  .tadd { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 6px; }
+  .tadd .grow { flex: 1 1 260px; }
+  .tadd input, .tadd select { font: inherit; font-size: 15px; color: var(--ink); background: #fff; border: 1px solid var(--line); border-radius: 10px; padding: 9px 12px; min-height: 44px; width: 100%; }
+  .tadd input:focus, .tadd select:focus { outline: none; border-color: var(--blue); box-shadow: 0 0 0 3px var(--blue-soft); }
+  .tlist { list-style: none; margin: 0; padding: 0; }
+  .tlist li { display: grid; grid-template-columns: 28px minmax(0, 1fr) auto 36px; gap: 10px; align-items: center; padding: 9px 0; border-top: 1px solid var(--line); }
+  .tlist input[type=checkbox] { width: 20px; height: 20px; accent-color: var(--green); margin: 0 4px; cursor: pointer; }
+  .tlist .tt { min-width: 0; overflow-wrap: anywhere; }
+  .tlist .tt small { display: block; font-size: 13px; color: var(--muted); }
+  .tlist li.done .tt { color: var(--dim); text-decoration: line-through; }
+  .tlist .due { font-size: 13px; font-weight: 600; color: var(--muted); white-space: nowrap; }
+  .tlist .due.over { color: var(--red); } .tlist .due.today { color: var(--amber); }
+  .tlist .x { width: 36px; height: 36px; border: 0; background: transparent; color: var(--dim); font-size: 20px; border-radius: 8px; cursor: pointer; }
+  .tlist .x:hover { color: var(--red); background: var(--red-soft); }
+  .tlist .empty { display: block; color: var(--dim); font-size: 15px; padding: 14px 0 6px; border: 0; }
+  .tshow { font: inherit; font-size: 14px; font-weight: 600; color: var(--blue); background: transparent; border: 0; padding: 10px 0 0; cursor: pointer; }
+  .sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 </style>
 </head>
 <body>
@@ -343,6 +366,21 @@
   </div>
 
 
+  <section class="hud todo" aria-labelledby="todoH">
+    <div class="hh"><h2 id="todoH">To do</h2><small><button type="button" class="copy" id="todoEditSec">Edit sections</button></small></div>
+    <div class="hb">
+      <div class="tsecs" id="todoSecs" role="tablist" aria-label="To-do sections"></div>
+      <form class="tadd" id="todoForm">
+        <label class="grow"><span class="sr">New to-do</span><input id="todoText" placeholder="Add a to-do…" autocomplete="off"></label>
+        <label><span class="sr">Section</span><select id="todoSec"></select></label>
+        <label><span class="sr">Due date (optional)</span><input type="date" id="todoDue"></label>
+        <button class="btn" type="submit">Add</button>
+      </form>
+      <ul class="tlist" id="todoList" aria-live="polite"></ul>
+      <button type="button" class="tshow" id="todoShowDone" hidden></button>
+      <p class="note err" id="todoErr" role="alert" hidden></p>
+    </div>
+  </section>
   <div class="cols">
     <section class="hud" aria-labelledby="calH">
       <div class="hh"><h2 id="calH">Schedule</h2><small id="calStamp"></small></div>

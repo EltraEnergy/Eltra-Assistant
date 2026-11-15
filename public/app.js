@@ -139,6 +139,7 @@
   var todayTimer = null;
   function loadToday() {
     clearTimeout(todayTimer); todayTimer = setTimeout(loadToday, 3 * 60000);
+    loadTodos();
     return api('today').then(function (d) { D = d; renderAll(); }).catch(function (e) { $('cal').innerHTML = '<p class="note err">' + esc(e.message) + '</p>'; });
   }
   document.addEventListener('click', function (e) {
@@ -151,7 +152,7 @@
   var CHAT = 'eltra-hud-chat-v1';
   var chat = load(CHAT, null) || { messages: [], approvals: null, results: {}, decided: {} };
   var busy = false, lastError = null, steps = 0, aborted = false;
-  var LABELS = { gmail_search: 'Searching email', gmail_read: 'Reading email', gmail_create_draft: 'Drafting email', gmail_send_draft: 'Sending email', gmail_archive: 'Archiving email', gmail_save_attachments: 'Saving attachments', calendar_events: 'Checking calendar', calendar_create_event: 'Adding to calendar', drive_search: 'Searching Drive', sheets_read: 'Reading sheet', pylon_find_projects: 'Checking Pylon', pylon_project: 'Opening Pylon project', pylon_create_project: 'Setting up Pylon project', pylon_new_project_link: 'Making Pylon link', drive_read_file: 'Reading file', drive_list_folder: 'Opening folder', drive_move: 'Moving files', drive_create_folder: 'Creating folder', drive_rename: 'Renaming', ghl_pipelines: 'Checking pipeline', ghl_search_opportunities: 'Looking up leads', ghl_search_contacts: 'Looking up contacts', ghl_move_opportunity: 'Updating lead', ghl_add_note: 'Adding note', ghl_add_task: 'Adding task', sm8_jobs: 'Looking up jobs', sm8_schedule: 'Checking schedule', sm8_add_job_note: 'Adding job note', sm8_create_job: 'Creating job' };
+  var LABELS = { gmail_search: 'Searching email', gmail_read: 'Reading email', gmail_create_draft: 'Drafting email', gmail_send_draft: 'Sending email', gmail_archive: 'Archiving email', gmail_save_attachments: 'Saving attachments', calendar_events: 'Checking calendar', calendar_create_event: 'Adding to calendar', drive_search: 'Searching Drive', sheets_read: 'Reading sheet', pylon_find_projects: 'Checking Pylon', pylon_project: 'Opening Pylon project', pylon_create_project: 'Setting up Pylon project', pylon_new_project_link: 'Making Pylon link', drive_read_file: 'Reading file', todo_list: 'Checking to-dos', todo_add: 'Adding to-do', todo_update: 'Updating to-do', pylon_preapproval_pack: 'Building pre-approval pack', drive_list_folder: 'Opening folder', drive_move: 'Moving files', drive_create_folder: 'Creating folder', drive_rename: 'Renaming', ghl_pipelines: 'Checking pipeline', ghl_search_opportunities: 'Looking up leads', ghl_search_contacts: 'Looking up contacts', ghl_move_opportunity: 'Updating lead', ghl_add_note: 'Adding note', ghl_add_task: 'Adding task', sm8_jobs: 'Looking up jobs', sm8_schedule: 'Checking schedule', sm8_add_job_note: 'Adding job note', sm8_create_job: 'Creating job' };
   function persist() { save(CHAT, chat); }
   function md(t) {
     var out = '', inList = false;
@@ -237,6 +238,7 @@
       render();
       var last = chat.messages[chat.messages.length - 1];
       var text = last && last.role === 'assistant' ? (last.content || []).filter(function (c) { return c.type === 'text'; }).map(function (c) { return c.text; }).join(' ') : '';
+      if (JSON.stringify(chat.messages.slice(-6)).indexOf('todo_') >= 0) loadTodos();
       if (text && !$('speak').checked) openDrawer('chat'); else if (text && $('chatDrawer').hidden) $('chatBtn').classList.add('has');
       if (text) speak(text, asksSomething(text)); else setState('idle', 'Ready');
     }).catch(function (e) {
@@ -536,6 +538,10 @@
       : /\b(hello|hi|hey)\b/.test(t) && Math.random() < 0.5 ? 'Hello, sir. Good ' + tod + '.'
       : 'Good ' + tod + ', sir.';
     var bits = [], reply = parseInt($('sReply').textContent, 10);
+    var tdy = new Date().toLocaleDateString('en-CA', { timeZone: TZ }), od = 0, dt = 0;
+    (todos.items || []).forEach(function (x) { if (!x.done && x.due) { if (x.due < tdy) od++; else if (x.due === tdy) dt++; } });
+    if (od) bits.push(od === 1 ? 'one to-do is overdue' : od + ' to-dos are overdue');
+    if (dt) bits.push(dt === 1 ? 'one to-do is due today' : dt + ' to-dos are due today');
     if (reply > 0) bits.push(reply === 1 ? 'one email needs a reply' : reply + ' emails need replies');
     var now = Date.now(), nx = events.filter(function (e) { return !e.allDay && e.start.getTime() > now; })[0];
     if (nx) {
@@ -543,7 +549,8 @@
       var tmr = fmt(nx.start, { day: 'numeric', month: 'numeric' }) === fmt(new Date(now + 86400000), { day: 'numeric', month: 'numeric' });
       bits.push('next up is ' + (nx.title || 'an appointment') + ' at ' + fmt(nx.start, { hour: 'numeric', minute: '2-digit', hourCycle: 'h12' }).replace(/\s/g, '').toLowerCase() + (sameDay ? '' : tmr ? ' tomorrow' : ' on ' + fmt(nx.start, { weekday: 'long' })));
     }
-    var line = bits.length ? ' ' + bits.join(', and ').replace(/^./, function (c) { return c.toUpperCase(); }) + '.' : ' All quiet for now.';
+    var joined = bits.length > 1 ? bits.slice(0, -1).join(', ') + ', and ' + bits[bits.length - 1] : bits[0] || '';
+    var line = bits.length ? ' ' + joined.replace(/^./, function (c) { return c.toUpperCase(); }) + '.' : ' All quiet for now.';
     return first + ' ' + systemsLine() + line + ' What can I do for you?';
   }
   // Wake-up: the logo's three bars charge up, then a glowing orb pulses while she talks and drops into the mic button.
@@ -608,6 +615,61 @@
   $('scrim').onclick = closeDrawers;
   document.querySelectorAll('[data-close]').forEach(function (b) { b.onclick = closeDrawers; });
   document.addEventListener('keydown', function (e) { if (e.key === 'Escape') closeDrawers(); });
+
+  // ================= to-do list =================
+  var todos = { sections: [], items: [] }, todoTab = 'All', showDone = false;
+  function todoDueText(d) {
+    if (!d) return null;
+    var today = fmt(new Date(), { year: 'numeric', month: '2-digit', day: '2-digit' }).split('/').reverse().join('-');
+    var t = new Date(d + 'T12:00:00'), cls = d < today ? 'over' : d === today ? 'today' : '';
+    var txt = d === today ? 'Today' : d < today ? 'Overdue · ' + t.toLocaleDateString('en-AU', { day: 'numeric', month: 'short' }) : t.toLocaleDateString('en-AU', { weekday: 'short', day: 'numeric', month: 'short' });
+    return { cls: cls, txt: txt };
+  }
+  function renderTodos() {
+    var secs = $('todoSecs'); secs.textContent = '';
+    ['All'].concat(todos.sections).forEach(function (sname) {
+      var n = todos.items.filter(function (x) { return !x.done && (sname === 'All' || x.section === sname); }).length;
+      var b = document.createElement('button'); b.type = 'button'; b.setAttribute('role', 'tab'); b.setAttribute('aria-selected', sname === todoTab);
+      b.innerHTML = esc(sname) + (n ? '<span class="n">' + n + '</span>' : '');
+      b.onclick = function () { todoTab = sname; if (sname !== 'All') $('todoSec').value = sname; renderTodos(); };
+      secs.appendChild(b);
+    });
+    var sel = $('todoSec'), cur = sel.value; sel.textContent = '';
+    todos.sections.forEach(function (sname) { var o = document.createElement('option'); o.textContent = sname; sel.appendChild(o); });
+    sel.value = todoTab !== 'All' ? todoTab : (todos.sections.indexOf(cur) >= 0 ? cur : todos.sections[0]);
+    var inTab = todos.items.filter(function (x) { return todoTab === 'All' || x.section === todoTab; });
+    var open = inTab.filter(function (x) { return !x.done; }).sort(function (a, b) { return (a.due || '9999') < (b.due || '9999') ? -1 : (a.due || '9999') > (b.due || '9999') ? 1 : a.createdAt < b.createdAt ? -1 : 1; });
+    var done = inTab.filter(function (x) { return x.done; }).sort(function (a, b) { return (b.doneAt || '') < (a.doneAt || '') ? -1 : 1; });
+    var list = $('todoList'); list.textContent = '';
+    if (!open.length) { var e = document.createElement('li'); e.className = 'empty'; e.textContent = todoTab === 'All' ? 'Nothing to do. Add one above, or ask Eltra to.' : 'Nothing in ' + todoTab + '.'; list.appendChild(e); }
+    open.concat(showDone ? done : []).forEach(function (it) {
+      var li = document.createElement('li'); if (it.done) li.className = 'done';
+      var due = todoDueText(it.due);
+      li.innerHTML = '<input type="checkbox"' + (it.done ? ' checked' : '') + ' aria-label="Done: ' + esc(it.text) + '">' +
+        '<span class="tt">' + esc(it.text) + ((todoTab === 'All' || it.ref) ? '<small>' + [todoTab === 'All' ? it.section : '', it.ref].filter(Boolean).map(esc).join(' · ') + '</small>' : '') + '</span>' +
+        '<span class="due ' + (due && !it.done ? due.cls : '') + '">' + (due ? esc(due.txt) : '') + '</span>' +
+        '<button type="button" class="x" aria-label="Delete: ' + esc(it.text) + '">×</button>';
+      li.querySelector('input').onchange = function (ev) { todoCall({ action: 'update', id: it.id, done: ev.target.checked }); };
+      li.querySelector('.x').onclick = function () { todoCall({ action: 'delete', id: it.id }); };
+      list.appendChild(li);
+    });
+    var sd = $('todoShowDone'); sd.hidden = !done.length; sd.textContent = showDone ? 'Hide finished' : 'Show finished (' + done.length + ')';
+  }
+  function todoCall(body) {
+    $('todoErr').hidden = true;
+    return api('todos', { method: 'POST', body: body }).then(function (d) { todos = d; renderTodos(); }).catch(function (e) { $('todoErr').textContent = e.message; $('todoErr').hidden = false; });
+  }
+  function loadTodos() { return api('todos').then(function (d) { todos = d; renderTodos(); }).catch(function () {}); }
+  $('todoForm').onsubmit = function (e) {
+    e.preventDefault(); var t = $('todoText').value.trim(); if (!t) return;
+    todoCall({ action: 'add', text: t, section: $('todoSec').value, due: $('todoDue').value }).then(function () { $('todoText').value = ''; $('todoDue').value = ''; $('todoText').focus(); });
+  };
+  $('todoShowDone').onclick = function () { showDone = !showDone; renderTodos(); };
+  $('todoEditSec').onclick = function () {
+    var v = prompt('Sections, separated by commas:', todos.sections.join(', '));
+    if (v === null) return;
+    todoCall({ action: 'sections', sections: v.split(',').map(function (x) { return x.trim(); }).filter(Boolean) }).then(function () { if (todos.sections.indexOf(todoTab) < 0) todoTab = 'All'; renderTodos(); });
+  };
 
   // ================= start =================
   function startApp() {

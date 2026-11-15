@@ -1,5 +1,6 @@
 // The agent's tools. "action" tools change something (send, move, create) and only run after Will taps Approve.
 import { g, GMAIL, CAL, DRIVE, DRIVE_UP } from './google.mjs';
+import { loadTodos, addTodo, updateTodo } from './todos.mjs';
 import { tz, clip, melbToDate, melbToday } from './util.mjs';
 
 // ---------------- helpers ----------------
@@ -93,7 +94,7 @@ export async function pylon(path, opts = {}) {
 }
 const cents = (c) => c == null ? null : '$' + (c / 100).toLocaleString('en-AU', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const pylonAddr = (a) => a ? [a.line1, a.line2, a.city, a.state, a.zip].filter(Boolean).join(', ') : null;
-const pylonProject = (p) => {
+export const pylonProject = (p) => {
   const a = p.attributes || {}, r = p.relationships || {}, acc = a.acceptance || {};
   return {
     id: p.id, reference: a.reference_number, customer: a.customer_details || null, address: pylonAddr(a.site_address),
@@ -104,8 +105,8 @@ const pylonProject = (p) => {
     signed_design_id: r.latest_signed_design && r.latest_signed_design.data ? r.latest_signed_design.data.id : null
   };
 };
-const DESIGN_FIELDS = 'title,label,is_primary,summary,pricing,proposal_quote,locale,module_types,inverter_types,storage_types,created_at,updated_at';
-const pylonDesign = (d) => {
+export const DESIGN_FIELDS = 'title,label,is_primary,summary,pricing,proposal_quote,locale,module_types,inverter_types,storage_types,created_at,updated_at';
+export const pylonDesign = (d) => {
   const a = d.attributes || {}, s = a.summary || {}, q = a.proposal_quote || {}, au = (a.locale && a.locale.au) || {};
   const parts = (list) => (list || []).map((x) => (x.quantity && x.quantity !== 1 ? x.quantity + ' × ' : '') + x.description);
   return {
@@ -547,6 +548,73 @@ tool({
     const q = new URLSearchParams({ search: i.address, country: 'AU' });
     if (i.customer_name) q.set('customer_name', i.customer_name); if (i.email) q.set('customer_email', i.email); if (i.phone) q.set('customer_phone', i.phone);
     return { link: 'https://app.getpylon.com/map/address?' + q.toString() };
+  }
+});
+
+
+// ---------- To-do list (sections like DNSP, Quoting, Order stock) ----------
+tool({
+  name: 'todo_list', group: 'core',
+  description: 'Show Will\'s to-do list. Optionally one section (e.g. "DNSP", "Quoting", "Order stock", "Admin"). Includes ids for ticking things off.',
+  input_schema: { type: 'object', properties: { section: { type: 'string' }, include_done: { type: 'boolean' } } },
+  async run({ section, include_done }) {
+    const d = await loadTodos(), low = String(section || '').toLowerCase();
+    const items = d.items.filter((x) => (include_done || !x.done) && (!low || x.section.toLowerCase().includes(low) || low.includes(x.section.toLowerCase())));
+    return { sections: d.sections, items: items.map((x) => ({ id: x.id, section: x.section, text: x.text, due: x.due || undefined, done: x.done || undefined, ref: x.ref || undefined })) };
+  }
+});
+tool({
+  name: 'todo_add', group: 'core',
+  description: 'Add a to-do for Will. section: DNSP (pre-approvals, grid connections), Quoting, Order stock, Admin, or a new section name. due: YYYY-MM-DD if he gave a day. ref: customer or job it relates to.',
+  input_schema: { type: 'object', properties: { text: { type: 'string' }, section: { type: 'string' }, due: { type: 'string' }, ref: { type: 'string' } }, required: ['text'] },
+  async run(i) { const it = await addTodo(i); return { added: it }; }
+});
+tool({
+  name: 'todo_update', group: 'core',
+  description: 'Tick off (done: true), reopen, rename, move or re-date a to-do by id (get ids from todo_list).',
+  input_schema: { type: 'object', properties: { id: { type: 'string' }, done: { type: 'boolean' }, text: { type: 'string' }, section: { type: 'string' }, due: { type: 'string' } }, required: ['id'] },
+  async run({ id, ...patch }) { const it = await updateTodo(id, patch); return { updated: it }; }
+});
+
+// ---------- DNSP pre-approval pack (filled in a browser by Will or Claude in Chrome) ----------
+tool({
+  name: 'pylon_preapproval_pack', group: 'pylon',
+  description: 'Build a DNSP pre-approval pack for a Pylon project: every detail the distributor portal asks for (customer, site, NMI, meter, retailer, phases, panels, inverter, battery, export request), a list of anything missing, and a ready instruction Will can paste into Claude in Chrome to fill the portal and stop before submitting. Uses the signed design if there is one, otherwise the primary design.',
+  input_schema: { type: 'object', properties: { project_id: { type: 'string' }, export_limit_kw: { type: 'number', description: 'export limit to request, if Will said' }, distributor: { type: 'string', description: 'if Will said, e.g. Powercor' } }, required: ['project_id'] },
+  async run({ project_id, export_limit_kw, distributor }) {
+    const p = await pylon('/solar_projects/' + encodeURIComponent(project_id));
+    const a = p.data.attributes || {}, site = a.site_details || {}, cust = a.customer_details || {}, proj = pylonProject(p.data);
+    const ds = await pylon('/solar_designs?filter[project]=' + encodeURIComponent(project_id) + '&fields[solar_designs]=' + DESIGN_FIELDS).catch(() => ({ data: [] }));
+    const designs = (ds.data || []).map(pylonDesign);
+    const d = designs.find((x) => x.id === proj.signed_design_id) || designs.find((x) => x.primary) || designs[0] || null;
+    const dnsp = distributor || site.energy_distributor || '';
+    const pack = {
+      customer: { name: cust.name || '', phone: cust.phone || '', email: cust.email || '' },
+      site: { address: proj.address || '', nmi: site.nmi || '', meter_number: site.meter_number || '', retailer: site.energy_retailer || '', distributor: dnsp,
+        phases: site.power_phases || '', storeys: site.number_of_storeys || '', roof_type: site.roof_type || '', existing_preapproval: site.dnsp_preapproval_number || '' },
+      system: d ? { design: d.title, solar_kw_dc: d.solar_kw, panels: d.panels, inverters: d.inverters, battery: d.batteries, battery_kwh: d.battery_kwh, signed: proj.signed } : null,
+      export_limit_requested_kw: export_limit_kw || null,
+      installer: { company: 'Eltra Energy' }
+    };
+    const missing = [];
+    if (!pack.site.nmi) missing.push('NMI (on the electricity bill)');
+    if (!pack.site.meter_number) missing.push('meter number');
+    if (!pack.site.retailer) missing.push('energy retailer');
+    if (!dnsp) missing.push('distributor (Powercor, CitiPower, Jemena, AusNet or United Energy)');
+    if (!pack.site.phases) missing.push('number of phases');
+    if (!d) missing.push('a design in Pylon');
+    else { if (!d.inverters.length) missing.push('inverter model'); if (!d.panels.length && d.solar_kw) missing.push('panel model'); }
+    if (!export_limit_kw) missing.push('export limit to request');
+    const lines = [
+      'Go to the ' + (dnsp || '[distributor]') + ' connections portal (I am logged in) and start a new solar' + (d && d.battery_kwh ? ' and battery' : '') + ' pre-approval / embedded generation application with these details:',
+      'Customer: ' + [cust.name, cust.phone, cust.email].filter(Boolean).join(', '),
+      'Site: ' + (proj.address || '[address]') + (site.nmi ? ' · NMI ' + site.nmi : ' · NMI [missing]') + (site.meter_number ? ' · meter ' + site.meter_number : '') + (site.energy_retailer ? ' · retailer ' + site.energy_retailer : '') + (site.power_phases ? ' · ' + ({ one: 'single', two: 'two', three: 'three', split: 'split' }[site.power_phases] || site.power_phases) + ' phase' : ''),
+      d ? 'System: ' + d.solar_kw + ' kW DC solar' + (d.panels.length ? ' (' + d.panels.join('; ') + ')' : '') + (d.inverters.length ? ', inverter ' + d.inverters.join('; ') : '') + (d.battery_kwh ? ', battery ' + (d.batteries.join('; ') || '') + ' ' + d.battery_kwh + ' kWh' : '') : 'System: [no design yet]',
+      'Export limit requested: ' + (export_limit_kw ? export_limit_kw + ' kW' : '[confirm with Will]'),
+      'Installer company: Eltra Energy. Use the installer and accreditation details already saved in the portal.',
+      'Fill in every field you can, tell me about anything the form asks for that is not listed here, and STOP before submitting so I can check it.'
+    ];
+    return { pack, missing, chrome_instruction: lines.join('\n'), note: 'Show Will the missing items first. Offer to add a DNSP to-do to lodge it.' };
   }
 });
 
