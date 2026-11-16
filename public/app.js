@@ -83,7 +83,9 @@
     var s = D.status || {}, g = s.google || {}, stamp = 'Synced ' + fmt(new Date(D.at), { hour: '2-digit', minute: '2-digit', hourCycle: 'h23' });
     var dot = function (on, label, link) { return '<span><i class="dot ' + (on === true ? 'on' : on === 'warn' ? 'warn' : '') + '"></i>' + label + '</span>'; };
     var googleDot = !g.setUp ? dot(false, 'Google') : !g.connected ? '<span><i class="dot warn"></i><a href="/.netlify/functions/google-auth?start=1">Connect Google</a></span>' : dot(D.calendar && D.calendar.error ? 'warn' : true, 'Google');
-    $('sys').innerHTML = googleDot + dot(s.ghl, 'GoHighLevel') + dot(s.sm8, 'ServiceM8') + dot(s.voice, 'Voice');
+    var ig = s.instagram || {};
+    var igDot = !ig.setUp ? '' : ig.connected ? '<span><i class="dot on"></i>Instagram' + (ig.username ? ' @' + esc(ig.username) : '') + '</span>' : '<span><i class="dot warn"></i><a href="/.netlify/functions/instagram-auth?start=1">Connect Instagram</a></span>';
+    $('sys').innerHTML = googleDot + dot(s.ghl, 'GoHighLevel') + dot(s.sm8, 'ServiceM8') + igDot + dot(s.voice, 'Voice');
     var sl = systemsLine(), allUp = sl === 'All systems are up.';
     $('sysPill').innerHTML = '<i class="dot ' + (allUp ? 'on' : 'warn') + '"></i><span>' + esc(allUp ? 'All systems up' : sl.replace(/^All systems are up, except (.*)\.$/, '$1 not connected')) + '</span>';
 
@@ -155,7 +157,7 @@
   var CHAT = 'eltra-hud-chat-v1';
   var chat = load(CHAT, null) || { messages: [], approvals: null, results: {}, decided: {} };
   var busy = false, lastError = null, steps = 0, aborted = false;
-  var LABELS = { gmail_search: 'Searching email', gmail_read: 'Reading email', gmail_create_draft: 'Drafting email', gmail_send_draft: 'Sending email', gmail_archive: 'Archiving email', gmail_save_attachments: 'Saving attachments', calendar_events: 'Checking calendar', calendar_create_event: 'Adding to calendar', drive_search: 'Searching Drive', sheets_read: 'Reading sheet', pylon_find_projects: 'Checking Pylon', pylon_project: 'Opening Pylon project', pylon_create_project: 'Setting up Pylon project', pylon_new_project_link: 'Making Pylon link', drive_read_file: 'Reading file', todo_list: 'Checking to-dos', todo_add: 'Adding to-do', todo_update: 'Updating to-do', dnsp_task_pack: 'Preparing the DNSP task', read_document: 'Reading document', instagram_skill: 'Loading Instagram guide', instagram_humanize: 'Polishing the post', instagram_voice: 'Checking our Instagram voice', instagram_hooks: 'Scoring hooks', instagram_beats: 'Timing the script', instagram_swipe: 'Ranking what works', instagram_carousel: 'Making carousel slides', drive_list_folder: 'Opening folder', drive_move: 'Moving files', drive_create_folder: 'Creating folder', drive_rename: 'Renaming', ghl_pipelines: 'Checking pipeline', ghl_search_opportunities: 'Looking up leads', ghl_search_contacts: 'Looking up contacts', ghl_move_opportunity: 'Updating lead', ghl_add_note: 'Adding note', ghl_add_task: 'Adding task', sm8_jobs: 'Looking up jobs', sm8_schedule: 'Checking schedule', sm8_add_job_note: 'Adding job note', sm8_create_job: 'Creating job' };
+  var LABELS = { gmail_search: 'Searching email', gmail_read: 'Reading email', gmail_create_draft: 'Drafting email', gmail_send_draft: 'Sending email', gmail_archive: 'Archiving email', gmail_save_attachments: 'Saving attachments', calendar_events: 'Checking calendar', calendar_create_event: 'Adding to calendar', drive_search: 'Searching Drive', sheets_read: 'Reading sheet', pylon_find_projects: 'Checking Pylon', pylon_project: 'Opening Pylon project', pylon_create_project: 'Setting up Pylon project', pylon_new_project_link: 'Making Pylon link', drive_read_file: 'Reading file', todo_list: 'Checking to-dos', todo_add: 'Adding to-do', todo_update: 'Updating to-do', dnsp_task_pack: 'Preparing the DNSP task', read_document: 'Reading document', instagram_skill: 'Loading Instagram guide', instagram_humanize: 'Polishing the post', instagram_voice: 'Checking our Instagram voice', instagram_hooks: 'Scoring hooks', instagram_beats: 'Timing the script', instagram_swipe: 'Ranking what works', instagram_carousel: 'Making carousel slides', instagram_post: 'Posting to Instagram', instagram_finish_post: 'Finishing the post', instagram_insights: 'Checking Instagram numbers', instagram_comments: 'Reading comments', instagram_reply: 'Replying on Instagram', instagram_hide_comment: 'Hiding comment', drive_list_folder: 'Opening folder', drive_move: 'Moving files', drive_create_folder: 'Creating folder', drive_rename: 'Renaming', ghl_pipelines: 'Checking pipeline', ghl_search_opportunities: 'Looking up leads', ghl_search_contacts: 'Looking up contacts', ghl_move_opportunity: 'Updating lead', ghl_add_note: 'Adding note', ghl_add_task: 'Adding task', sm8_jobs: 'Looking up jobs', sm8_schedule: 'Checking schedule', sm8_add_job_note: 'Adding job note', sm8_create_job: 'Creating job' };
   function persist() { save(CHAT, chat); }
   function md(t) {
     var out = '', inList = false;
@@ -183,6 +185,7 @@
             else if (c.type === 'document') pics += '<span class="attdoc">PDF</span>';
             else if (/^\[Attached photo/.test(c.text) && th[thi]) pics += '<img class="att" alt="Photo you sent" src="' + th[thi++] + '">';
             else if (/^\[Attached /.test(c.text)) pics += '<span class="attdoc">' + esc(c.text.replace(/^\[Attached (\w+).*$/, '$1')) + '</span>';
+            else if (/^\[Photos? saved for posting/.test(c.text)) { /* link for Eltra, not shown */ }
             else words += esc(c.text);
           });
           h += '<div class="m you">' + (pics ? '<div class="atts">' + pics + '</div>' : '') + words + '</div>'; return;
@@ -192,7 +195,7 @@
             var cs; try { cs = JSON.parse(c.content).carousel; } catch (e) { cs = null; }
             if (cs && cs.slides && cs.slides.length) {
               var ck = carousels.push(cs) - 1;
-              h += '<div class="card task"><div class="ch">Carousel · ' + cs.slides.length + ' slides</div><div class="slides">' + cs.slides.map(function (sl, si) { return '<canvas class="slide" width="216" height="270" data-car="' + ck + '" data-slide="' + si + '" aria-label="Slide ' + (si + 1) + ': ' + esc(sl.heading) + '"></canvas>'; }).join('') + '</div><div class="row"><button type="button" class="btn" data-cardl="' + ck + '">Save slide images</button></div></div>';
+              h += '<div class="card task"><div class="ch">Carousel · ' + cs.slides.length + ' slides</div><div class="slides">' + cs.slides.map(function (sl, si) { return '<canvas class="slide" width="216" height="270" data-car="' + ck + '" data-slide="' + si + '" aria-label="Slide ' + (si + 1) + ': ' + esc(sl.heading) + '"></canvas>'; }).join('') + '</div><div class="row"><button type="button" class="btn" data-cardl="' + ck + '">Save slide images</button>' + (igConnected() ? '<button type="button" class="btn no" data-carpost="' + ck + '">Post to Instagram</button>' : '') + '</div></div>';
             }
             return;
           }
@@ -231,6 +234,7 @@
   }
   $('log').addEventListener('click', function (e) {
     var dl = e.target.closest('[data-cardl]'); if (dl) { saveCarousel(carousels[+dl.dataset.cardl], dl); return; }
+    var cpb = e.target.closest('[data-carpost]'); if (cpb) { postCarousel(carousels[+cpb.dataset.carpost], cpb); return; }
     var cp = e.target.closest('[data-taskcopy]');
     if (cp) {
       e.stopPropagation();
@@ -277,6 +281,8 @@
     }
     if (pendingAtt.length) {
       var blocks = pendingAtt.map(function (p) { return p.block; });
+      var links = pendingAtt.filter(function (p) { return p.url; }).map(function (p) { return p.url; });
+      if (links.length) blocks.push({ type: 'text', text: '[Photo' + (links.length > 1 ? 's' : '') + ' saved for posting to Instagram: ' + links.join(' ') + ']' });
       blocks.push({ type: 'text', text: text || (pendingAtt.length > 1 ? 'Here are some files.' : 'Here’s a file.') });
       var smalls = pendingAtt.map(function (p) { return p.small || ''; });
       chat.messages.push({ role: 'user', content: blocks });
@@ -588,6 +594,7 @@
     if (g.setUp && !g.connected) down.push('Google');
     if (st.ghl === false) down.push('GoHighLevel');
     if (st.sm8 === false) down.push('ServiceM8');
+    if (st.instagram && st.instagram.setUp && !st.instagram.connected) down.push('Instagram');
     if (!D) return 'Systems are still coming online.';
     return down.length ? 'All systems are up, except ' + down.join(' and ') + '.' : 'All systems are up.';
   }
@@ -694,6 +701,18 @@
     if (logoImg.complete && logoImg.naturalWidth) { var lh = 64, lw = lh * logoImg.naturalWidth / logoImg.naturalHeight; ctx.drawImage(logoImg, pad, H - 92, lw, lh); }
     else logoImg.onload = function () { drawSlide(cv, car, i, scale); };
   }
+  function igConnected() { return !!(D && D.status && D.status.instagram && D.status.instagram.connected); }
+  // Instagram fetches images from a public link, so upload JPEG versions of the slides and hand Eltra the links
+  function postCarousel(car, btn) {
+    btn.disabled = true; btn.textContent = 'Preparing slides…';
+    var fontsReady = document.fonts && document.fonts.load ? Promise.all([document.fonts.load('700 100px "Barlow Semi Condensed"'), document.fonts.load('500 50px Barlow')]).catch(function () {}) : Promise.resolve();
+    fontsReady.then(function () {
+      var datas = car.slides.map(function (sl, i) { var cv = document.createElement('canvas'); cv.width = 1080; cv.height = 1350; drawSlide(cv, car, i, 1); return cv.toDataURL('image/jpeg', 0.92); });
+      return Promise.all(datas.map(function (d) { return api('media', { method: 'POST', body: { data: d } }); }));
+    }).then(function (rs) {
+      btn.textContent = 'Sent to Eltra'; ask('Post this carousel to Instagram with the caption we wrote for it. Slide links, in order: ' + rs.map(function (r) { return r.url; }).join(' '));
+    }).catch(function (e) { btn.disabled = false; btn.textContent = 'Post to Instagram'; $('vHint').textContent = 'Couldn’t prepare the slides: ' + e.message; });
+  }
   function saveCarousel(car, btn) {
     var fontsReady = document.fonts && document.fonts.load ? Promise.all([document.fonts.load('700 100px "Barlow Semi Condensed"'), document.fonts.load('500 50px Barlow')]).catch(function () {}) : Promise.resolve();
     fontsReady.then(function () { saveCarouselNow(car, btn); });
@@ -730,7 +749,9 @@
           c.width = Math.round(img.width * k); c.height = Math.round(img.height * k); c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
           var data = c.toDataURL('image/jpeg', 0.85); URL.revokeObjectURL(url);
           var k2 = Math.min(1, 200 / Math.max(img.width, img.height)), t = document.createElement('canvas'); t.width = Math.round(img.width * k2); t.height = Math.round(img.height * k2); t.getContext('2d').drawImage(img, 0, 0, t.width, t.height); p.small = t.toDataURL('image/jpeg', 0.7);
-          p.loading = false; p.thumb = data; p.block = { type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: data.split(',')[1] } }; renderAtt();
+          p.thumb = data; p.block = { type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: data.split(',')[1] } };
+          if (igConnected()) api('media', { method: 'POST', body: { data: data } }).then(function (r) { p.url = r.url; }).catch(function () {}).then(function () { p.loading = false; renderAtt(); });
+          else { p.loading = false; renderAtt(); }
         };
         img.onerror = function () { pendingAtt.splice(pendingAtt.indexOf(p), 1); renderAtt(); $('vHint').textContent = 'Couldn’t open that photo. Try a JPEG or PNG.'; };
         img.src = url;
@@ -858,7 +879,7 @@
     tick(); setInterval(tick, 1000); setInterval(renderNext, 30000);
     render(); loadToday();
     api('speak').then(function (d) { voices = d; fillVoices(); }).catch(function () { voices = { configured: false }; fillVoices(); });
-    if (/google=connected/.test(location.search)) history.replaceState(null, '', '/');
+    if (/(google|instagram)=connected/.test(location.search)) history.replaceState(null, '', '/');
   }
   api('login').then(function (d) { if (d.loggedIn) { if (d.user) me = { user: d.user, name: d.name }; showApp(); } else showLogin(); }).catch(showLogin);
 })();

@@ -6,6 +6,7 @@ import { loadPrefs, portalFor } from './prefs.mjs';
 import { SKILLS, HOOKS, VOICE_TEMPLATE, RUBRIC } from './instagram-data.mjs';
 import { humanize, detect } from './instagram.mjs';
 import { rankHooks, beatSheet, swipeFile, captionLint } from './instagram-tools.mjs';
+import { igSetUp, publishPost, finishPost, recentPosts, listComments, replyComment, hideComment } from './instagram-api.mjs';
 import { store as blobStore } from './util.mjs';
 import { tz, clip, melbToDate, melbToday } from './util.mjs';
 
@@ -754,8 +755,50 @@ tool({
   }
 });
 
+
+// ---------- Instagram account (posting, insights, comments) ----------
+tool({
+  name: 'instagram_post', group: 'instagram', action: true,
+  description: 'Post to the Eltra Energy Instagram: one photo or a carousel of 2-10 images, with the caption. image_urls must be public JPEG links: use the "saved for posting" links on photos Ethan attached, or the slide links sent from a carousel card\'s "Post to Instagram" button. Run the caption through instagram_humanize (is_caption) first. Will or Ethan approves before it goes live.',
+  input_schema: { type: 'object', properties: { image_urls: { type: 'array', items: { type: 'string' } }, caption: { type: 'string' } }, required: ['image_urls', 'caption'] },
+  async describe(i) { const n = (i.image_urls || []).length; return { title: 'Post to Instagram' + (n > 1 ? ' (carousel, ' + n + ' slides)' : ''), lines: [String(i.caption || '').slice(0, 400) + (String(i.caption || '').length > 400 ? '…' : '')] }; },
+  async run(i) { return publishPost(i); }
+});
+tool({
+  name: 'instagram_finish_post', group: 'instagram',
+  description: 'Finish publishing an Instagram post that was still processing (use the container_id instagram_post returned).',
+  input_schema: { type: 'object', properties: { container_id: { type: 'string' } }, required: ['container_id'] },
+  async run({ container_id }) { return finishPost(container_id); }
+});
+tool({
+  name: 'instagram_insights', group: 'instagram',
+  description: 'The Eltra Energy Instagram account (followers, posts) and its recent posts with likes, comments, reach, saves, shares and views. Use for ig-audit, weekly reviews and "how did that post do?".',
+  input_schema: { type: 'object', properties: { limit: { type: 'integer', description: 'how many recent posts, default 10' } } },
+  async run({ limit }) { return recentPosts(limit || 10); }
+});
+tool({
+  name: 'instagram_comments', group: 'instagram',
+  description: 'Recent comments on the Eltra Energy Instagram posts (or one post by media_id), newest first, with comment ids for replying. Use with the ig-reply guide: sort into keyword / lead / substance / question / support / noise, then draft replies in that order.',
+  input_schema: { type: 'object', properties: { media_id: { type: 'string' } } },
+  async run(i) { return listComments(i); }
+});
+tool({
+  name: 'instagram_reply', group: 'instagram', action: true,
+  description: 'Reply to a comment on an Eltra Energy Instagram post (by comment_id). Run the reply through instagram_humanize first. Approved before it posts.',
+  input_schema: { type: 'object', properties: { comment_id: { type: 'string' }, message: { type: 'string' }, to: { type: 'string', description: 'who you are replying to and what they said, for the approval card' } }, required: ['comment_id', 'message'] },
+  async describe(i) { return { title: 'Reply on Instagram' + (i.to ? ' to ' + i.to : ''), lines: [i.message] }; },
+  async run(i) { return replyComment(i); }
+});
+tool({
+  name: 'instagram_hide_comment', group: 'instagram', action: true,
+  description: 'Hide (or unhide) a spam or abusive comment on an Eltra Energy Instagram post.',
+  input_schema: { type: 'object', properties: { comment_id: { type: 'string' }, hide: { type: 'boolean' }, text: { type: 'string', description: 'the comment, for the approval card' } }, required: ['comment_id'] },
+  async describe(i) { return { title: (i.hide === false ? 'Unhide' : 'Hide') + ' an Instagram comment', lines: [i.text || i.comment_id] }; },
+  async run(i) { return hideComment(i); }
+});
+
 // Tools available right now (only the systems that are set up)
 export function activeTools() {
-  return T.filter((t) => t.group === 'google' ? !!process.env.GOOGLE_CLIENT_ID : t.group === 'ghl' ? ghlReady() : t.group === 'sm8' ? sm8Ready() : t.group === 'pylon' ? pylonReady() : true);
+  return T.filter((t) => t.group === 'google' ? !!process.env.GOOGLE_CLIENT_ID : t.group === 'ghl' ? ghlReady() : t.group === 'sm8' ? sm8Ready() : t.group === 'pylon' ? pylonReady() : t.group === 'instagram' ? igSetUp() : true);
 }
 export const toolByName = (n) => T.find((t) => t.name === n);

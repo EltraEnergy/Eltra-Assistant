@@ -1,5 +1,6 @@
 // Dashboard data: the next 7 days of calendar, recent email conversations, open leads and booked jobs.
 import { json, guard, melbToday, melbToDate } from '../lib/util.mjs';
+import { igStatus } from '../lib/instagram-api.mjs';
 import { googleStatus, g, CAL } from '../lib/google.mjs';
 import { ghlReady, sm8Ready, ghlOpps, sm8Schedule, eventOut, gmailThreads } from '../lib/tools.mjs';
 
@@ -9,7 +10,7 @@ const MAIL_Q = '-in:sent -in:drafts newer_than:7d -category:promotions -category
 export default async (req) => {
   const bad = guard(req); if (bad) return bad;
   const gs = await googleStatus().catch(() => ({ setUp: false, connected: false }));
-  const out = { status: { google: gs, ghl: ghlReady(), sm8: sm8Ready(), voice: !!process.env.ELEVENLABS_API_KEY }, at: new Date().toISOString() };
+  const out = { status: { google: gs, ghl: ghlReady(), sm8: sm8Ready(), voice: !!process.env.ELEVENLABS_API_KEY, instagram: await igStatus().catch(() => ({ setUp: false })) }, at: new Date().toISOString() };
   const jobs = [];
   if (gs.connected) {
     const sp = new URLSearchParams({ timeMin: melbToDate(melbToday()).toISOString(), timeMax: melbToDate(melbToday(7)).toISOString(), singleEvents: 'true', orderBy: 'startTime', maxResults: '60', timeZone: 'Australia/Melbourne' });
