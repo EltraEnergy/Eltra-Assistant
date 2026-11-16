@@ -27,18 +27,26 @@ export default async (req) => {
   const tok = await tr.json().catch(() => ({}));
   if (!tr.ok || !tok.access_token) return page('Instagram didn’t connect', (tok.error && tok.error.message) || 'No access was granted.');
 
-  // which Instagram account was granted: read it from the token's granted scopes
+  // Which Instagram account was granted. System-user tokens don't always say, so try in turn: the token's granted
+  // scopes, INSTAGRAM_ACCOUNT_ID from Netlify, then any Facebook Page link. Each candidate is checked against the token.
   const dbg = await (await fetch('https://graph.facebook.com/debug_token?' + new URLSearchParams({ input_token: tok.access_token, access_token: appId + '|' + secret }))).json().catch(() => ({}));
   const scopes = (dbg.data && dbg.data.granular_scopes) || [];
-  const ids = [...new Set(scopes.filter((s) => /^instagram_/.test(s.scope)).flatMap((s) => s.target_ids || []))];
-  let igId = ids[0] || null, username = null;
-  if (!igId) {   // fallback: an Instagram account linked through a Facebook Page
-    const pg = await (await fetch('https://graph.facebook.com/me/accounts?' + new URLSearchParams({ fields: 'instagram_business_account{id,username}', access_token: tok.access_token }))).json().catch(() => ({}));
-    const hit = (pg.data || []).find((p) => p.instagram_business_account);
-    if (hit) { igId = hit.instagram_business_account.id; username = hit.instagram_business_account.username; }
+  const cands = [...new Set([
+    ...scopes.filter((x) => /^instagram_/.test(x.scope)).flatMap((x) => x.target_ids || []),
+    (process.env.INSTAGRAM_ACCOUNT_ID || '').trim(),
+    ...scopes.flatMap((x) => x.target_ids || [])
+  ].filter(Boolean))];
+  const pg = await (await fetch('https://graph.facebook.com/me/accounts?' + new URLSearchParams({ fields: 'instagram_business_account{id,username}', access_token: tok.access_token }))).json().catch(() => ({}));
+  (pg.data || []).forEach((p) => { if (p.instagram_business_account) cands.push(p.instagram_business_account.id); });
+  let igId = null, username = null;
+  for (const c of cands) {
+    const u = await (await fetch('https://graph.facebook.com/' + encodeURIComponent(c) + '?' + new URLSearchParams({ fields: 'username', access_token: tok.access_token }))).json().catch(() => ({}));
+    if (u && u.username) { igId = c; username = u.username; break; }
   }
-  if (!igId) return page('No Instagram account was shared', 'When Meta asks which accounts to give access to, tick the Eltra Energy Instagram account, then try again.');
-  if (!username) { const u = await (await fetch('https://graph.facebook.com/' + igId + '?' + new URLSearchParams({ fields: 'username', access_token: tok.access_token }))).json().catch(() => ({})); username = u.username || null; }
+  if (!igId) {
+    const granted = scopes.map((x) => x.scope + (x.target_ids && x.target_ids.length ? ' (' + x.target_ids.length + ' asset' + (x.target_ids.length > 1 ? 's' : '') + ')' : '')).join(', ') || 'none listed';
+    return page('No Instagram account was shared', 'Meta connected, but Eltra couldn’t reach an Instagram account with it. If it isn’t there yet, add INSTAGRAM_ACCOUNT_ID = 17841474006679183 in Netlify, redeploy and connect again. If it already is, send Claude a screenshot of this page. (Granted: ' + granted.replace(/[<>&]/g, '') + ')');
+  }
   await store().setJSON('instagram', { token: tok.access_token, igId, username, connectedBy: user, connectedAt: new Date().toISOString() });
   return new Response(null, { status: 302, headers: { Location: '/?instagram=connected' } });
 };

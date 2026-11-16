@@ -3,22 +3,44 @@
 // Instagram account id are saved once someone taps Connect Instagram. Shared by Will and Ethan (it's the business account).
 import { store } from './util.mjs';
 
-const GRAPH = 'https://graph.facebook.com';
-export const igSetUp = () => !!(process.env.META_APP_ID && process.env.META_APP_SECRET && process.env.META_CONFIG_ID);
-export async function igAccount() { return igSetUp() ? await store().get('instagram', { type: 'json' }).catch(() => null) : null; }
-export async function igStatus() { const a = await igAccount(); return { setUp: igSetUp(), connected: !!(a && a.token && a.igId), username: a && a.username }; }
+const FB = 'https://graph.facebook.com', IGG = 'https://graph.instagram.com';
+// Two ways in: the Connect Instagram button (saved token), or a token generated in the Meta developer dashboard and put in
+// Netlify as INSTAGRAM_ACCESS_TOKEN (+ INSTAGRAM_ACCOUNT_ID). Instagram-style tokens ("IG…") use graph.instagram.com and
+// are refreshed automatically before their 60 days run out; Facebook-style tokens use graph.facebook.com.
+const envToken = () => (process.env.INSTAGRAM_ACCESS_TOKEN || '').trim();
+export const igSetUp = () => !!(envToken() || (process.env.META_APP_ID && process.env.META_APP_SECRET && process.env.META_CONFIG_ID));
+const baseFor = (tok) => (/^IG/.test(tok || '') ? IGG : FB);
+async function envAccount() {
+  const env = envToken(); if (!env) return null;
+  const tag = env.slice(-12), saved = await store().get('instagram-env', { type: 'json' }).catch(() => null);
+  let token = saved && saved.tag === tag && saved.token ? saved.token : env, refreshed = saved && saved.tag === tag ? saved.refreshedAt : null, username = saved && saved.tag === tag ? saved.username : null;
+  if (/^IG/.test(token) && (!refreshed || Date.now() - Date.parse(refreshed) > 20 * 864e5)) {
+    const r = await fetch(IGG + '/refresh_access_token?' + new URLSearchParams({ grant_type: 'ig_refresh_token', access_token: token })).then((x) => x.json()).catch(() => ({}));
+    if (r.access_token) token = r.access_token;
+    refreshed = new Date().toISOString();
+  }
+  const igId = (process.env.INSTAGRAM_ACCOUNT_ID || '').trim() || 'me';
+  if (!username) { const u = await fetch(baseFor(token) + '/' + (baseFor(token) === IGG ? 'me' : igId) + '?' + new URLSearchParams({ fields: 'username', access_token: token })).then((x) => x.json()).catch(() => ({})); username = u.username || null; }
+  if (!saved || saved.token !== token || saved.refreshedAt !== refreshed || saved.username !== username) await store().setJSON('instagram-env', { tag, token, refreshedAt: refreshed, username });
+  return { token, igId, username, source: 'netlify' };
+}
+export async function igAccount() {
+  if (!igSetUp()) return null;
+  return (await envAccount().catch(() => null)) || (await store().get('instagram', { type: 'json' }).catch(() => null));
+}
+export async function igStatus() { const a = await igAccount().catch(() => null); return { setUp: igSetUp(), connected: !!(a && a.token && a.igId), username: a && a.username, via: a && a.source }; }
 
 export async function graph(path, { method = 'GET', params = {}, token } = {}) {
   const acc = token ? null : await igAccount();
   const tok = token || (acc && acc.token);
   if (!tok) throw new Error('Instagram isn’t connected yet. Open Settings and tap Connect Instagram.');
   const q = new URLSearchParams({ ...params, access_token: tok });
-  const res = await fetch(GRAPH + '/' + path.replace(/^\//, '') + (method === 'GET' ? '?' + q : ''), method === 'GET' ? {} : { method, headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: q });
+  const res = await fetch(baseFor(tok) + '/' + path.replace(/^\//, '') + (method === 'GET' ? '?' + q : ''), method === 'GET' ? {} : { method, headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: q });
   const d = await res.json().catch(() => ({}));
   if (!res.ok || d.error) throw new Error('Instagram: ' + ((d.error && (d.error.error_user_msg || d.error.message)) || 'error ' + res.status));
   return d;
 }
-const igId = async () => { const a = await igAccount(); if (!a || !a.igId) throw new Error('Instagram isn’t connected yet. Open Settings and tap Connect Instagram.'); return a.igId; };
+const igId = async () => { const a = await igAccount(); if (!a || !a.igId) throw new Error('Instagram isn’t connected yet. Open Settings and tap Connect Instagram.'); return baseFor(a.token) === IGG ? 'me' : a.igId; };
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 async function waitReady(container, maxMs = 7000) {
   const end = Date.now() + maxMs;
@@ -87,6 +109,7 @@ export const hideComment = ({ comment_id, hide = true }) => graph(comment_id, { 
 // comments, but not views, so "how far it beat the account" is measured on engagement (likes + comments).
 export async function researchAccounts(handles, perAccount = 12) {
   const id = await igId(), out = [], problems = [];
+  if (id === 'me') return { rows: [], problems: ['Looking up other accounts isn’t available with this kind of Instagram token. Use instagram_research_in_browser (Claude in Chrome) instead.'] };
   for (const raw of (handles || []).slice(0, 12)) {
     const h = String(raw || '').replace(/^@/, '').trim(); if (!h) continue;
     try {
