@@ -557,7 +557,7 @@ tool({
 // ---------- To-do list (sections like DNSP, Quoting, Order stock) ----------
 tool({
   name: 'todo_list', group: 'core',
-  description: 'Show the to-do list. By default only the ones for the person you are talking to (and shared ones); whose: "everyone" shows the whole team\'s, "will" or "ethan" one person\'s. Optionally one section (e.g. "DNSP", "Quoting", "Order stock", "Bookings", "Accounts", "Socials", "Admin"). Includes ids for ticking things off.',
+  description: 'Show the to-do list. By default only the ones for the person you are talking to (and shared ones); whose: "everyone" shows the whole team\'s, "will" or "ethan" one person\'s. Optionally one section (e.g. "DNSP", "Quoting", "Order stock", "Install dates", "Accounts", "Socials", "Admin"). Includes ids for ticking things off.',
   input_schema: { type: 'object', properties: { section: { type: 'string' }, include_done: { type: 'boolean' }, whose: { type: 'string', enum: ['mine', 'everyone', 'will', 'ethan'] } } },
   async run({ section, include_done, whose }) {
     const d = await loadTodos(), low = String(section || '').toLowerCase(), me = currentUser();
@@ -568,7 +568,7 @@ tool({
 });
 tool({
   name: 'todo_add', group: 'core',
-  description: 'Add a to-do. section: DNSP (pre-approvals, grid connections), Quoting, Order stock, Bookings (booking installs), Accounts (invoices, Xero/MYOB), Socials (Facebook/Instagram), Admin, or a new section name. for: "me" (default, the person you are talking to), "will", "ethan" or "both". due: YYYY-MM-DD if a day was given. ref: customer or job it relates to.',
+  description: 'Add a to-do. section: DNSP (pre-approvals, grid connections), Quoting, Order stock, Install dates (booking installs in), Accounts (invoicing, Xero/MYOB), Socials (Facebook/Instagram), Admin, or a new section name. Ethan looks after Order stock, Install dates, Accounts and Socials; Will does DNSP, Quoting and the rest, so if for is not given and the task clearly belongs to the other person, set for to them. for: "me" (default, the person you are talking to), "will", "ethan" or "both". due: YYYY-MM-DD if a day was given. ref: customer or job it relates to.',
   input_schema: { type: 'object', properties: { text: { type: 'string' }, section: { type: 'string' }, for: { type: 'string', enum: ['me', 'will', 'ethan', 'both'] }, due: { type: 'string' }, ref: { type: 'string' } }, required: ['text'] },
   async run(i) { const it = await addTodo({ ...i, owner: i.for }); return { added: it }; }
 });

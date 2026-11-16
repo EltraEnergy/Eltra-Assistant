@@ -746,8 +746,12 @@
   }
   function renderTodos() {
     var secs = $('todoSecs'); secs.textContent = '';
-    ['All'].concat(todos.sections).forEach(function (sname) {
-      var n = todos.items.filter(function (x) { return !x.done && (todoWho === 'all' || mine(x)) && (sname === 'All' || x.section === sname); }).length;
+    var count = function (sname) { return todos.items.filter(function (x) { return !x.done && (todoWho === 'all' || mine(x)) && (sname === 'All' || x.section === sname); }).length; };
+    // on "Mine", only show the sections where you actually have something to do
+    var shownSecs = todoWho === 'all' ? todos.sections : todos.sections.filter(function (sname) { return count(sname) > 0 || sname === todoTab; });
+    if (todoTab !== 'All' && todos.sections.indexOf(todoTab) < 0) todoTab = 'All';
+    ['All'].concat(shownSecs).forEach(function (sname) {
+      var n = count(sname);
       var b = document.createElement('button'); b.type = 'button'; b.setAttribute('role', 'tab'); b.setAttribute('aria-selected', sname === todoTab);
       b.innerHTML = esc(sname) + (n ? '<span class="n">' + n + '</span>' : '');
       b.onclick = function () { todoTab = sname; if (sname !== 'All') $('todoSec').value = sname; renderTodos(); };

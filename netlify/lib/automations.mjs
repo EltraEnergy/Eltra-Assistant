@@ -13,8 +13,8 @@ const dayPlus = (n) => { const d = new Date(Date.now() + n * 864e5); return d.to
 function signedTasks(name, design) {
   const kit = design ? [design.panels.join('; '), design.inverters.join('; '), design.batteries.join('; ')].filter(Boolean).join(' · ') : '';
   return [
-    { section: 'Admin', text: 'Send ' + name + ' the welcome / next steps email', due: dayPlus(0), owner: 'ethan' },
-    { section: 'Bookings', text: 'Book the install date with ' + name, due: dayPlus(1), owner: 'ethan' },
+    { section: 'Admin', text: 'Send ' + name + ' the welcome / next steps email', due: dayPlus(0), owner: 'will' },
+    { section: 'Install dates', text: 'Book the install date with ' + name, due: dayPlus(1), owner: 'ethan' },
     { section: 'DNSP', text: 'Lodge the DNSP pre-approval for ' + name, due: dayPlus(1), owner: 'will' },
     { section: 'Order stock', text: 'Order stock for ' + name + (kit ? ': ' + kit : ''), due: dayPlus(2), owner: 'ethan' }
   ];

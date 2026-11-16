@@ -3,18 +3,24 @@ import { store, currentUser, USERS } from './util.mjs';
 import crypto from 'node:crypto';
 
 const KEY = 'todos';
-const DEFAULT_SECTIONS = ['DNSP', 'Quoting', 'Order stock', 'Bookings', 'Accounts', 'Socials', 'Admin'];
-const ETHAN_SECTIONS = ['Bookings', 'Accounts', 'Socials'];
+const DEFAULT_SECTIONS = ['DNSP', 'Quoting', 'Order stock', 'Install dates', 'Accounts', 'Socials', 'Admin'];
+const ETHAN_SECTIONS = ['Install dates', 'Accounts', 'Socials'];
+// Ethan looks after stock, socials, install dates and accounts/invoicing
+const ETHAN_WORK = /(stock|install date|booking|account|invoic|social)/i;
 // who a to-do is for: 'will', 'ethan' or 'both'
 export const ownerOf = (v) => { const x = String(v || '').toLowerCase(); return x === 'both' || x === 'everyone' || x === 'team' ? 'both' : USERS[x] ? x : x === 'me' ? currentUser() : currentUser(); };
 const str = (v, n) => String(v ?? '').trim().slice(0, n);
 
 export async function loadTodos() {
   const d = (await store().get(KEY, { type: 'json' })) || {};
-  const sections = Array.isArray(d.sections) && d.sections.length ? d.sections : DEFAULT_SECTIONS.slice();
+  let sections = Array.isArray(d.sections) && d.sections.length ? d.sections.slice() : DEFAULT_SECTIONS.slice();
+  // "Bookings" became "Install dates": fold it in
+  const bi = sections.findIndex((x) => /^bookings?$/i.test(x)), ii = sections.findIndex((x) => /^install dates?$/i.test(x));
+  if (bi >= 0) { if (ii >= 0) sections.splice(bi, 1); else sections[bi] = 'Install dates'; }
+  (d.items || []).forEach((x) => { if (/^bookings?$/i.test(x.section || '')) x.section = 'Install dates'; });
   if (!d.teamSections) ETHAN_SECTIONS.forEach((x) => { if (!sections.some((y) => y.toLowerCase() === x.toLowerCase())) sections.splice(Math.max(0, sections.length - 1), 0, x); });   // one-off: add Ethan's sections
   // to-dos from before Ethan joined have no owner: give his kind of work to him, the rest to Will
-  const guessOwner = (x) => /(stock|booking|account|social)/i.test(x.section || '') || /(welcome|next steps email|book the install|order stock|invoice|xero|myob|instagram|facebook)/i.test(x.text || '') ? 'ethan' : 'will';
+  const guessOwner = (x) => ETHAN_WORK.test(x.section || '') || /(book the install|install date|order stock|invoice|xero|myob|instagram|facebook)/i.test(x.text || '') ? 'ethan' : 'will';
   // (older to-dos have no 'by' field; ones you've deliberately reassigned are marked ownerSet)
   const items = (Array.isArray(d.items) ? d.items : []).map((x) => (x.by || x.ownerSet ? x : { ...x, owner: guessOwner(x) }));
   return { sections, items, teamSections: true };
@@ -28,7 +34,7 @@ function pickSection(d, name, create) {
   const hit = d.sections.find((s) => s.toLowerCase() === low) || d.sections.find((s) => s.toLowerCase().includes(low) || low.includes(s.toLowerCase()))
     || (/(stock|order|buy|supplier)/.test(low) && d.sections.find((s) => /stock/i.test(s))) || (/(quote|proposal|pylon)/.test(low) && d.sections.find((s) => /quot/i.test(s)))
     || (/(dnsp|pre.?approval|grid|powercor|citipower|jemena|ausnet|united)/.test(low) && d.sections.find((s) => /dnsp/i.test(s)))
-    || (/(book|schedul|install date|calendar)/.test(low) && d.sections.find((s) => /book/i.test(s)))
+    || (/(book|schedul|install date|calendar)/.test(low) && d.sections.find((s) => /install date|book/i.test(s)))
     || (/(account|invoice|xero|myob|bill|payment|bas|gst)/.test(low) && d.sections.find((s) => /account/i.test(s)))
     || (/(social|facebook|instagram|post|insta|fb)/.test(low) && d.sections.find((s) => /social/i.test(s)));
   if (hit) return hit;
