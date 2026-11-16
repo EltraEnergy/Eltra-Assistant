@@ -41,7 +41,44 @@ function trim(messages) {
   if (m.length > 40) m = m.slice(-40);
   // start at a plain user message (not a tool result)
   while (m.length && !(m[0].role === 'user' && (typeof m[0].content === 'string' || !m[0].content.some((c) => c.type === 'tool_result')))) m.shift();
-  return m;
+  return repair(m);
+}
+// Every tool_use needs its tool_result straight after it. If a step was interrupted (Stop pressed, page closed,
+// lost signal, a new message sent while a card was waiting), patch the gap instead of failing the whole chat.
+function repair(m) {
+  const out = [];
+  for (let i = 0; i < m.length; i++) {
+    const msg = m[i];
+    if (msg.role === 'user' && Array.isArray(msg.content)) {
+      // drop tool_results that don't answer the message just before (left over from trimming)
+      const prev = out[out.length - 1], ids = new Set(toolUses(prev).map((u) => u.id));
+      const content = msg.content.filter((c) => c.type !== 'tool_result' || ids.has(c.tool_use_id));
+      if (!content.length) continue;
+      out.push({ ...msg, content });
+    } else out.push(msg);
+    const uses = toolUses(msg);
+    if (!uses.length || i === m.length - 1) continue;   // the last message may be waiting for Will's approval
+    const next = m[i + 1];
+    const have = new Set(next.role === 'user' && Array.isArray(next.content) ? next.content.filter((c) => c.type === 'tool_result').map((c) => c.tool_use_id) : []);
+    const missing = uses.filter((u) => !have.has(u.id)).map((u) => ({ type: 'tool_result', tool_use_id: u.id, content: 'Not run: the conversation moved on before this finished.' }));
+    if (!missing.length) continue;
+    if (next.role === 'user') {
+      const rest = typeof next.content === 'string' ? [{ type: 'text', text: next.content }] : next.content;
+      m[i + 1] = { ...next, content: missing.concat(rest) };
+    } else m.splice(i + 1, 0, { role: 'user', content: missing });
+  }
+  // two user messages in a row (e.g. after a dropped reply) get merged
+  const merged = [];
+  for (const msg of out) {
+    const last = merged[merged.length - 1];
+    if (last && last.role === msg.role && msg.role === 'user') {
+      const a = typeof last.content === 'string' ? [{ type: 'text', text: last.content }] : last.content;
+      const b = typeof msg.content === 'string' ? [{ type: 'text', text: msg.content }] : msg.content;
+      const results = a.concat(b).filter((c) => c.type === 'tool_result'), other = a.concat(b).filter((c) => c.type !== 'tool_result');
+      merged[merged.length - 1] = { ...last, content: results.concat(other) };
+    } else merged.push(msg);
+  }
+  return merged;
 }
 const toolUses = (msg) => (msg && msg.role === 'assistant' && Array.isArray(msg.content) ? msg.content.filter((c) => c.type === 'tool_use') : []);
 
