@@ -33,9 +33,10 @@
   function showApp() { $('loginView').hidden = true; $('appView').hidden = false; if (!started) { started = true; startApp(); } }
   $('loginForm').addEventListener('submit', function (e) {
     e.preventDefault(); $('loginErr').textContent = '';
-    api('login', { method: 'POST', body: { password: $('pw').value } }).then(function (d) { if (d && d.user) me = { user: d.user, name: d.name }; $('pw').value = ''; showApp(); }).catch(function (err) { $('loginErr').textContent = err.message; });
+    // reload after logging in, so nothing from a previous person's session stays on screen
+    api('login', { method: 'POST', body: { password: $('pw').value } }).then(function () { $('pw').value = ''; location.reload(); }).catch(function (err) { $('loginErr').textContent = err.message; });
   });
-  $('logout').onclick = function () { api('login', { method: 'DELETE' }).catch(function () {}).then(showLogin); };
+  $('logout').onclick = function () { api('login', { method: 'DELETE' }).catch(function () {}).then(function () { location.reload(); }); };
 
   // ================= clock =================
   function tick() {
@@ -793,6 +794,9 @@
 
   // ================= start =================
   function startApp() {
+    // each person has their own chat history on this device (Will's keeps its original name)
+    CHAT = 'eltra-hud-chat-v1' + (me.user === 'will' ? '' : '-' + me.user);
+    chat = load(CHAT, null) || { messages: [], approvals: null, results: {}, decided: {} };
     tick(); setInterval(tick, 1000); setInterval(renderNext, 30000);
     render(); loadToday();
     api('speak').then(function (d) { voices = d; fillVoices(); }).catch(function () { voices = { configured: false }; fillVoices(); });
