@@ -82,3 +82,20 @@ export async function listComments({ media_id, limit = 10 }) {
 }
 export const replyComment = ({ comment_id, message }) => graph(comment_id + '/replies', { method: 'POST', params: { message } }).then((r) => ({ replied: true, id: r.id }));
 export const hideComment = ({ comment_id, hide = true }) => graph(comment_id, { method: 'POST', params: { hide: hide ? 'true' : 'false' } }).then(() => ({ hidden: !!hide }));
+
+// Research other business/creator accounts (Meta's Business Discovery). Gives followers and each post's likes and
+// comments, but not views, so "how far it beat the account" is measured on engagement (likes + comments).
+export async function researchAccounts(handles, perAccount = 12) {
+  const id = await igId(), out = [], problems = [];
+  for (const raw of (handles || []).slice(0, 12)) {
+    const h = String(raw || '').replace(/^@/, '').trim(); if (!h) continue;
+    try {
+      const d = await graph(id, { params: { fields: 'business_discovery.username(' + h + '){username,followers_count,media.limit(' + Math.min(25, perAccount) + '){caption,like_count,comments_count,media_type,media_product_type,timestamp,permalink}}' } });
+      const bd = d.business_discovery || {}, posts = (bd.media && bd.media.data) || [];
+      const eng = posts.map((m) => (m.like_count || 0) + (m.comments_count || 0)).filter((n) => n >= 0).sort((a, b) => a - b);
+      const med = eng.length ? (eng.length % 2 ? eng[(eng.length - 1) / 2] : (eng[eng.length / 2 - 1] + eng[eng.length / 2]) / 2) : 0;
+      posts.forEach((m) => out.push({ account: '@' + (bd.username || h), followers: String(bd.followers_count || ''), median: String(Math.max(1, Math.round(med))), views: String((m.like_count || 0) + (m.comments_count || 0)), hook: String(m.caption || '').split('\n').find((l) => l.trim()) || '(no caption)', type: m.media_product_type === 'REELS' ? 'Reel' : m.media_type === 'CAROUSEL_ALBUM' ? 'Carousel' : 'Post', when: (m.timestamp || '').slice(0, 10), link: m.permalink }));
+    } catch (e) { problems.push('@' + h + ': ' + (/(not.*found|does not exist|cannot be found|business)/i.test(e.message) ? 'not found, or it is a personal account (only business and creator accounts can be looked up)' : e.message)); }
+  }
+  return { rows: out, problems };
+}

@@ -6,7 +6,7 @@ import { loadPrefs, portalFor } from './prefs.mjs';
 import { SKILLS, HOOKS, VOICE_TEMPLATE, RUBRIC } from './instagram-data.mjs';
 import { humanize, detect } from './instagram.mjs';
 import { rankHooks, beatSheet, swipeFile, captionLint } from './instagram-tools.mjs';
-import { igSetUp, publishPost, finishPost, recentPosts, listComments, replyComment, hideComment } from './instagram-api.mjs';
+import { igSetUp, publishPost, finishPost, recentPosts, listComments, replyComment, hideComment, researchAccounts } from './instagram-api.mjs';
 import { store as blobStore } from './util.mjs';
 import { tz, clip, melbToDate, melbToday } from './util.mjs';
 
@@ -702,7 +702,7 @@ tool({
     const vs = await blobStore().get('ig-voice', { type: 'json' }).catch(() => null), voice = vs && vs.text;
     const out = {
       guide: sk.body,
-      how_to_use_here: 'Every tool the guide mentions runs here under a different name: humanize.py and detect.py = instagram_humanize (run it on every draft before showing it); caption.py = instagram_humanize with is_caption true (add keywords for the search terms); hookscore.py = instagram_hooks; beats.py = instagram_beats; swipe.py = instagram_swipe; the carousel "1080x1350 files" = instagram_carousel (Ethan downloads the slide images from the chat). For research (ig-viral, trends, competitors) use web_search, and ask Ethan for screenshots or numbers of reels he has seen, since Instagram itself can\'t be browsed; Eltra can read screenshots he attaches. You can\'t post: Ethan posts. Never invent numbers, results or customer stories: use real ones from Pylon, jobs or what Ethan tells you, and never name a customer or show their address without their OK.',
+      how_to_use_here: 'Every tool the guide mentions runs here under a different name: humanize.py and detect.py = instagram_humanize (run it on every draft before showing it); caption.py = instagram_humanize with is_caption true (add keywords for the search terms); hookscore.py = instagram_hooks; beats.py = instagram_beats; swipe.py = instagram_swipe; the carousel "1080x1350 files" = instagram_carousel (Ethan downloads the slide images from the chat). For the ig-viral "go and look" step: use instagram_research to read the chosen accounts directly (engagement, no views), or instagram_research_in_browser to have Claude in Chrome read real view counts in Ethan\'s logged-in browser; web_search helps find accounts; Ethan can also attach screenshots. You can\'t post: Ethan posts. Never invent numbers, results or customer stories: use real ones from Pylon, jobs or what Ethan tells you, and never name a customer or show their address without their OK.',
       brand_voice: voice || 'Not saved yet. Before drafting, offer to fill it in with Ethan (instagram_voice) using this template:\n' + VOICE_TEMPLATE
     };
     if (skill === 'ig-profile') out.rubric = RUBRIC;
@@ -795,6 +795,35 @@ tool({
   input_schema: { type: 'object', properties: { comment_id: { type: 'string' }, hide: { type: 'boolean' }, text: { type: 'string', description: 'the comment, for the approval card' } }, required: ['comment_id'] },
   async describe(i) { return { title: (i.hide === false ? 'Unhide' : 'Hide') + ' an Instagram comment', lines: [i.text || i.comment_id] }; },
   async run(i) { return hideComment(i); }
+});
+
+
+tool({
+  name: 'instagram_research', group: 'instagram',
+  description: 'The ig-viral research step, done directly: look up 6-12 other Instagram business or creator accounts (handles), pull their recent posts, and rank every post by how far it beat that account\'s own normal (likes + comments vs the account\'s median), with the hook formula and hook score. Pick accounts per the ig-viral guide (4 direct competitors slightly ahead, 4 adjacent with the same audience, 2-4 much bigger for format only), or ask Ethan for them. Meta does not share view counts here; for views, use instagram_research_in_browser.',
+  input_schema: { type: 'object', properties: { accounts: { type: 'array', items: { type: 'string' } }, per_account: { type: 'integer', description: 'recent posts per account, default 12' }, reels_only: { type: 'boolean' } }, required: ['accounts'] },
+  async run({ accounts, per_account, reels_only }) {
+    const r = await researchAccounts(accounts, per_account || 12);
+    const rows = reels_only ? r.rows.filter((x) => x.type === 'Reel') : r.rows;
+    const ranked = swipeFile(rows);
+    const extra = Object.fromEntries(rows.map((x) => [x.hook + '|' + x.account, x]));
+    if (ranked.reels) ranked.reels = ranked.reels.slice(0, 25).map((x) => { const e = extra[x.hook + '|' + x.account] || {}; return { multiple: x.multiple, account: x.account, engagement: x.views, type: e.type, when: e.when, formula: x.formula, hook_score: x.hook_score, hook: x.hook, link: e.link }; });
+    return { ...ranked, measured_on: 'likes + comments against each account\'s median (Meta doesn\'t share other accounts\' views). Over 3x is a signal; under 1.5x is a normal day.', could_not_read: r.problems.length ? r.problems : undefined };
+  }
+});
+tool({
+  name: 'instagram_research_in_browser', group: 'core',
+  description: 'For ig-viral with real view counts: prepare a Claude in Chrome task that reads the chosen accounts\' Reels in Ethan\'s own logged-in browser (read only, at human pace) and returns a table to paste back here, which you then rank with instagram_swipe. The dashboard shows Copy and Open Instagram buttons.',
+  input_schema: { type: 'object', properties: { accounts: { type: 'array', items: { type: 'string' } } }, required: ['accounts'] },
+  async run({ accounts }) {
+    const list = (accounts || []).map((a) => '@' + String(a).replace(/^@/, '').trim()).filter((a) => a.length > 1).slice(0, 12);
+    const instruction = ['I am logged in to Instagram in this browser. Research these accounts, reading only (do not like, follow, comment, message or save anything, and go at a normal human pace):', list.join(', '), '',
+      'For each account: open its profile, note the follower count, open the Reels tab and read the view counts on its last 12 Reels. The median is the middle one of those 12.',
+      'List every Reel with views of at least 3 times that account\'s median. For each, open it and copy the first line exactly as said or shown on screen (the hook), plus the first on-screen text if different.',
+      'Give me the result as a table with one row per Reel and these columns: account | followers | median | views | hook | on-screen text | link.',
+      'If a profile needs anything other than reading, or something asks you to log in, stop and tell me.'].join('\n');
+    return { browser_task: { title: 'Instagram research – ' + list.length + ' accounts', distributor: 'Instagram', portal_url: 'https://www.instagram.com/', instruction, missing: list.length ? [] : ['accounts to research'] }, note: 'Tell Ethan to paste Claude in Chrome\'s table back here; then rank it with instagram_swipe and write the swipe file.' };
+  }
 });
 
 // Tools available right now (only the systems that are set up)
