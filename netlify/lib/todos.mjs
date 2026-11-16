@@ -13,7 +13,10 @@ export async function loadTodos() {
   const d = (await store().get(KEY, { type: 'json' })) || {};
   const sections = Array.isArray(d.sections) && d.sections.length ? d.sections : DEFAULT_SECTIONS.slice();
   if (!d.teamSections) ETHAN_SECTIONS.forEach((x) => { if (!sections.some((y) => y.toLowerCase() === x.toLowerCase())) sections.splice(Math.max(0, sections.length - 1), 0, x); });   // one-off: add Ethan's sections
-  const items = (Array.isArray(d.items) ? d.items : []).map((x) => (x.owner ? x : { ...x, owner: 'will' }));   // older to-dos were all Will's
+  // to-dos from before Ethan joined have no owner: give his kind of work to him, the rest to Will
+  const guessOwner = (x) => /(stock|booking|account|social)/i.test(x.section || '') || /(welcome|next steps email|book the install|order stock|invoice|xero|myob|instagram|facebook)/i.test(x.text || '') ? 'ethan' : 'will';
+  // (older to-dos have no 'by' field; ones you've deliberately reassigned are marked ownerSet)
+  const items = (Array.isArray(d.items) ? d.items : []).map((x) => (x.by || x.ownerSet ? x : { ...x, owner: guessOwner(x) }));
   return { sections, items, teamSections: true };
 }
 const save = (d) => store().setJSON(KEY, d);
@@ -45,7 +48,7 @@ export async function updateTodo(id, patch) {
   if (patch.text !== undefined) it.text = str(patch.text, 300) || it.text;
   if (patch.section !== undefined) it.section = pickSection(d, patch.section, true);
   if (patch.due !== undefined) it.due = /^\d{4}-\d{2}-\d{2}$/.test(patch.due || '') ? patch.due : '';
-  if (patch.owner !== undefined) it.owner = ownerOf(patch.owner);
+  if (patch.owner !== undefined) { it.owner = ownerOf(patch.owner); it.ownerSet = true; }
   if (patch.done !== undefined) { it.done = !!patch.done; it.doneAt = it.done ? new Date().toISOString() : undefined; }
   await save(d); return it;
 }
