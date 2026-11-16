@@ -3,6 +3,10 @@ import { g, GMAIL, CAL, DRIVE, DRIVE_UP, accessToken } from './google.mjs';
 import { loadTodos, addTodo, updateTodo } from './todos.mjs';
 import { currentUser } from './util.mjs';
 import { loadPrefs, portalFor } from './prefs.mjs';
+import { SKILLS, HOOKS, VOICE_TEMPLATE, RUBRIC } from './instagram-data.mjs';
+import { humanize, detect } from './instagram.mjs';
+import { rankHooks, beatSheet, swipeFile, captionLint } from './instagram-tools.mjs';
+import { store as blobStore } from './util.mjs';
 import { tz, clip, melbToDate, melbToday } from './util.mjs';
 
 // ---------------- helpers ----------------
@@ -682,6 +686,71 @@ tool({
       browser_task: { title: (commissioning ? 'Commissioning notice' : 'Pre-approval') + ' – ' + (cust.name || proj.address || 'customer'), distributor: portal.name, portal_url: portal.url, instruction: lines.join('\n'), missing },
       missing, note: 'The dashboard shows a card with Copy and Open portal buttons. Tell Will what is missing in one or two lines; offer a DNSP to-do.' + (portal.name && !portal.url ? ' No portal link is saved for ' + portal.name + ' yet: Will can add it under Settings > DNSP portals.' : '')
     };
+  }
+});
+
+
+// ---------- Instagram (the instagram-agent skill pack, adapted to run inside Eltra) ----------
+const IG_NAMES = Object.keys(SKILLS);
+tool({
+  name: 'instagram_skill', group: 'core',
+  description: 'Load one of the Instagram skill guides before doing Instagram work, then follow it: ig-caption (captions), ig-carousel (swipe posts), ig-reel (Reel scripts with scored hooks), ig-story (stories), ig-plan (the week\'s posts), ig-comment (comments on others\' posts), ig-reply (replies under our posts), ig-dm (DMs), ig-repurpose (one piece into many), ig-profile (score and rewrite the profile), ig-audit (review past posts from screenshots or numbers Ethan gives), ig-viral (what is working in the niche; needs examples from Ethan since you can\'t browse Instagram), ig-human (making text sound human). Also returns Eltra Energy\'s saved Instagram voice.',
+  input_schema: { type: 'object', properties: { skill: { type: 'string', enum: IG_NAMES } }, required: ['skill'] },
+  async run({ skill }) {
+    const sk = SKILLS[skill]; if (!sk) throw new Error('Unknown skill ' + skill);
+    const vs = await blobStore().get('ig-voice', { type: 'json' }).catch(() => null), voice = vs && vs.text;
+    const out = {
+      guide: sk.body,
+      how_to_use_here: 'Every tool the guide mentions runs here under a different name: humanize.py and detect.py = instagram_humanize (run it on every draft before showing it); caption.py = instagram_humanize with is_caption true (add keywords for the search terms); hookscore.py = instagram_hooks; beats.py = instagram_beats; swipe.py = instagram_swipe; the carousel "1080x1350 files" = instagram_carousel (Ethan downloads the slide images from the chat). For research (ig-viral, trends, competitors) use web_search, and ask Ethan for screenshots or numbers of reels he has seen, since Instagram itself can\'t be browsed; Eltra can read screenshots he attaches. You can\'t post: Ethan posts. Never invent numbers, results or customer stories: use real ones from Pylon, jobs or what Ethan tells you, and never name a customer or show their address without their OK.',
+      brand_voice: voice || 'Not saved yet. Before drafting, offer to fill it in with Ethan (instagram_voice) using this template:\n' + VOICE_TEMPLATE
+    };
+    if (skill === 'ig-profile') out.rubric = RUBRIC;
+    if (skill === 'ig-reel') out.hook_formulas = (HOOKS.hooks || []).map((h) => h.name + ': ' + h.template + ' (e.g. ' + h.example + ')');
+    return out;
+  }
+});
+tool({
+  name: 'instagram_humanize', group: 'core',
+  description: 'Clean an Instagram draft (caption, script, comment, reply, DM) exactly as the skill pack\'s humanizer does: strips em dashes, invisible characters and stock AI phrases, flags structural tells to rewrite by hand, and scores it on five checks (PASS / REVIEW / FLAGGED). With is_caption it also runs the caption check (what shows before "… more", hashtags, links, one ask, emoji, search terms). Run it on every draft; if it is not PASS, rewrite the flagged lines and run it again (two rounds is normal). Show Ethan the cleaned text, not just the score.',
+  input_schema: { type: 'object', properties: { text: { type: 'string' }, is_caption: { type: 'boolean' }, keywords: { type: 'array', items: { type: 'string' }, description: 'search terms the caption should contain' } }, required: ['text'] },
+  async run({ text, is_caption, keywords }) {
+    const h = humanize(text), before = detect(text), after = detect(h.text);
+    return { cleaned: h.text, changed: h.changes, rewrite_by_hand: h.flags, score_before: before.human_score + ' ' + before.verdict, score_after: after, caption: is_caption ? captionLint(h.text, keywords || []) : undefined,
+      honesty: 'These are local checks modelled on what AI detectors look for. They are not GPTZero or similar and can\'t promise a result.' };
+  }
+});
+tool({
+  name: 'instagram_hooks', group: 'core',
+  description: 'Score and rank Reel hooks (the first line, said in the first ~3 seconds) on length, specificity, stakes, front-loading and who it speaks to, with dealbreakers (greetings, "stop scrolling", preambles, hashtags, emoji). Pass 3 or more options and shoot the top one.',
+  input_schema: { type: 'object', properties: { hooks: { type: 'array', items: { type: 'string' } } }, required: ['hooks'] },
+  async run({ hooks }) { return rankHooks(hooks); }
+});
+tool({
+  name: 'instagram_beats', group: 'core',
+  description: 'Turn a Reel script (one line per beat) into a timed beat sheet: timecodes, hook/mid/CTA, beats that run too long, runs with nothing concrete, whether it loops, and length against a target.',
+  input_schema: { type: 'object', properties: { script: { type: 'string' }, wpm: { type: 'number', description: 'speaking pace, default 165 (or the voice file\'s pace)' }, target_seconds: { type: 'number' } }, required: ['script'] },
+  async run({ script, wpm, target_seconds }) { return beatSheet(script, wpm || 165, target_seconds || null); }
+});
+tool({
+  name: 'instagram_swipe', group: 'core',
+  description: 'Rank reels Ethan has found (or you found with web_search) by how far each beat its own account (views ÷ the account\'s typical views, or followers), name the hook formula each used and score the hooks. This is the research step of ig-viral.',
+  input_schema: { type: 'object', properties: { reels: { type: 'array', items: { type: 'object', properties: { account: { type: 'string' }, followers: { type: 'string' }, median: { type: 'string', description: 'the account\'s typical views per reel' }, views: { type: 'string' }, hook: { type: 'string' } }, required: ['views', 'hook'] } } }, required: ['reels'] },
+  async run({ reels }) { return swipeFile(reels); }
+});
+tool({
+  name: 'instagram_carousel', group: 'core',
+  description: 'Make the slide images for a carousel (1080×1350, Eltra Energy branding). Give the cover and each slide\'s words (keep each slide short: a heading and one or two lines). Ethan downloads the images from the card in the chat and posts them. Run the slide text through instagram_humanize first.',
+  input_schema: { type: 'object', properties: { slides: { type: 'array', items: { type: 'object', properties: { heading: { type: 'string' }, body: { type: 'string' } }, required: ['heading'] }, description: 'first is the cover, last is usually the ask' } }, required: ['slides'] },
+  async run({ slides }) { const s = (slides || []).slice(0, 10).map((x) => ({ heading: String(x.heading || '').slice(0, 120), body: String(x.body || '').slice(0, 300) })); return { carousel: { slides: s }, note: 'The dashboard shows the slides with a Download button. Tell Ethan they are ready.' }; }
+});
+tool({
+  name: 'instagram_voice', group: 'core',
+  description: 'Read or save Eltra Energy\'s Instagram voice (who we are, how we sound, words we use and avoid, positions, off-limits topics, proof we can use, the call to action). Every Instagram skill uses it. To save, pass the full filled-in text.',
+  input_schema: { type: 'object', properties: { save: { type: 'string', description: 'the complete voice text to save (replaces the old one)' } } },
+  async run({ save }) {
+    if (save) { await blobStore().setJSON('ig-voice', { text: String(save).slice(0, 5000), savedAt: new Date().toISOString() }); return { saved: true }; }
+    const v = await blobStore().get('ig-voice', { type: 'json' }).catch(() => null);
+    return v && v.text ? { voice: v.text } : { voice: null, template: VOICE_TEMPLATE };
   }
 });
 

@@ -24,7 +24,7 @@ function systemPrompt(gs) {
     'Wherever these instructions mention Will’s Gmail, Calendar, Drive or voice, that means Ethan’s own Google account and Ethan’s voice. You cannot see Will’s email or calendar and must never claim to.',
     'Call him Ethan. Do not call him "sir". Keep the same calm, helpful tone.',
     'For Ethan’s morning brief lead with: his to-dos (todo_list: Order stock, Install dates, Accounts and Socials), newly signed jobs that need stock ordered or an install date set, invoices to send or chase (pylon_find_projects with sold_only), supplier and customer emails in his inbox, and jobs coming up.',
-    'Socials: when he asks, draft Facebook and Instagram posts (short caption, a few relevant hashtags, and a suggestion for the photo). He posts them himself; you can’t post for him.',
+    'Socials: for any Instagram work (captions, carousels, Reels, stories, the week\'s plan, comments, replies, DMs, profile, reviewing posts) first load the matching guide with instagram_skill and follow it, use the saved brand voice, and run every draft through instagram_humanize before showing it. Facebook posts can reuse the Instagram caption. He posts them himself; you can’t post for him.',
     'Accounts: Xero and MYOB aren’t connected to you yet. Help with what you can (find invoices and supplier bills in his email, work out amounts from the pricing sheet, keep to-dos) and say plainly when something needs doing in Xero or MYOB.',
     'New to-dos you add for Ethan are his unless he says they’re for Will.',
     ''
@@ -109,7 +109,7 @@ async function runTools(uses, decisions) {
     if (t.action && decisions[u.id] !== true) return { type: 'tool_result', tool_use_id: u.id, content: 'Will declined this. It was not done.' };
     try {
       const out = await t.run(u.input || {});
-      return { type: 'tool_result', tool_use_id: u.id, content: clip(JSON.stringify(out), 15000) };
+      return { type: 'tool_result', tool_use_id: u.id, content: clip(JSON.stringify(out), 24000) };
     } catch (e) {
       return { type: 'tool_result', tool_use_id: u.id, is_error: true, content: e.message || 'Failed' };
     }
@@ -144,13 +144,17 @@ export default async (req) => {
   const gs = await googleStatus().catch(() => ({ setUp: false, connected: false }));
   const tools = activeTools().filter((t) => t.group !== 'google' || gs.connected).map((t) => ({ name: t.name, description: t.description, input_schema: t.input_schema }));
   if (tools.length) tools[tools.length - 1].cache_control = { type: 'ephemeral' };
-  const body = (model) => JSON.stringify({ model, max_tokens: 2000, system: [{ type: 'text', text: systemPrompt(gs), cache_control: { type: 'ephemeral' } }], tools, messages });
+  // Claude's own web search (for research such as what's working on Instagram). Turned off automatically if the
+  // Anthropic account doesn't allow it, or with WEB_SEARCH=off in Netlify.
+  let search = process.env.WEB_SEARCH !== 'off';
+  const body = (model) => JSON.stringify({ model, max_tokens: 3500, system: [{ type: 'text', text: systemPrompt(gs) + (search ? '\n- You can search the web (web_search) for current information: research, trends, product details, regulations. Say where facts came from.' : ''), cache_control: { type: 'ephemeral' } }], tools: search ? tools.concat([{ type: 'web_search_20250305', name: 'web_search', max_uses: 4, user_location: { type: 'approximate', city: 'Melbourne', region: 'Victoria', country: 'AU', timezone: 'Australia/Melbourne' } }]) : tools, messages });
   let res, out;
   try {
     let model = await pickModel(key);
     if (!model) return json(502, { error: 'No Claude models available for this API key.' });
     const call = (m) => fetch('https://api.anthropic.com/v1/messages', { method: 'POST', headers: { 'x-api-key': key, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' }, body: body(m) });
     res = await call(model); out = await res.json().catch(() => null);
+    if (search && res.status === 400 && out && out.error && /web.?search/i.test(out.error.message || '')) { search = false; res = await call(model); out = await res.json().catch(() => null); }
     if (res.status === 404 || (res.status === 400 && out && out.error && /model/i.test(out.error.message || ''))) {
       cachedModel = null; model = await pickModel(key, model);
       if (model) { res = await call(model); out = await res.json().catch(() => null); }

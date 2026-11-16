@@ -155,7 +155,7 @@
   var CHAT = 'eltra-hud-chat-v1';
   var chat = load(CHAT, null) || { messages: [], approvals: null, results: {}, decided: {} };
   var busy = false, lastError = null, steps = 0, aborted = false;
-  var LABELS = { gmail_search: 'Searching email', gmail_read: 'Reading email', gmail_create_draft: 'Drafting email', gmail_send_draft: 'Sending email', gmail_archive: 'Archiving email', gmail_save_attachments: 'Saving attachments', calendar_events: 'Checking calendar', calendar_create_event: 'Adding to calendar', drive_search: 'Searching Drive', sheets_read: 'Reading sheet', pylon_find_projects: 'Checking Pylon', pylon_project: 'Opening Pylon project', pylon_create_project: 'Setting up Pylon project', pylon_new_project_link: 'Making Pylon link', drive_read_file: 'Reading file', todo_list: 'Checking to-dos', todo_add: 'Adding to-do', todo_update: 'Updating to-do', dnsp_task_pack: 'Preparing the DNSP task', read_document: 'Reading document', drive_list_folder: 'Opening folder', drive_move: 'Moving files', drive_create_folder: 'Creating folder', drive_rename: 'Renaming', ghl_pipelines: 'Checking pipeline', ghl_search_opportunities: 'Looking up leads', ghl_search_contacts: 'Looking up contacts', ghl_move_opportunity: 'Updating lead', ghl_add_note: 'Adding note', ghl_add_task: 'Adding task', sm8_jobs: 'Looking up jobs', sm8_schedule: 'Checking schedule', sm8_add_job_note: 'Adding job note', sm8_create_job: 'Creating job' };
+  var LABELS = { gmail_search: 'Searching email', gmail_read: 'Reading email', gmail_create_draft: 'Drafting email', gmail_send_draft: 'Sending email', gmail_archive: 'Archiving email', gmail_save_attachments: 'Saving attachments', calendar_events: 'Checking calendar', calendar_create_event: 'Adding to calendar', drive_search: 'Searching Drive', sheets_read: 'Reading sheet', pylon_find_projects: 'Checking Pylon', pylon_project: 'Opening Pylon project', pylon_create_project: 'Setting up Pylon project', pylon_new_project_link: 'Making Pylon link', drive_read_file: 'Reading file', todo_list: 'Checking to-dos', todo_add: 'Adding to-do', todo_update: 'Updating to-do', dnsp_task_pack: 'Preparing the DNSP task', read_document: 'Reading document', instagram_skill: 'Loading Instagram guide', instagram_humanize: 'Polishing the post', instagram_voice: 'Checking our Instagram voice', instagram_hooks: 'Scoring hooks', instagram_beats: 'Timing the script', instagram_swipe: 'Ranking what works', instagram_carousel: 'Making carousel slides', drive_list_folder: 'Opening folder', drive_move: 'Moving files', drive_create_folder: 'Creating folder', drive_rename: 'Renaming', ghl_pipelines: 'Checking pipeline', ghl_search_opportunities: 'Looking up leads', ghl_search_contacts: 'Looking up contacts', ghl_move_opportunity: 'Updating lead', ghl_add_note: 'Adding note', ghl_add_task: 'Adding task', sm8_jobs: 'Looking up jobs', sm8_schedule: 'Checking schedule', sm8_add_job_note: 'Adding job note', sm8_create_job: 'Creating job' };
   function persist() { save(CHAT, chat); }
   function md(t) {
     var out = '', inList = false;
@@ -167,9 +167,9 @@
     });
     return out + (inList ? '</ul>' : '');
   }
-  var taskCards = [];
+  var taskCards = [], carousels = [];
   function render() {
-    var h = ''; taskCards = [];
+    var h = ''; taskCards = []; carousels = [];
     if (!chat.messages.length) h = '<div class="empty">Ask about your day, your email, a customer or a job</div>';
     chat.messages.forEach(function (m, mi) {
       if (m.role === 'user') {
@@ -188,6 +188,14 @@
           h += '<div class="m you">' + (pics ? '<div class="atts">' + pics + '</div>' : '') + words + '</div>'; return;
         }
         (m.content || []).forEach(function (c) {
+          if (c.type === 'tool_result' && typeof c.content === 'string' && c.content.indexOf('"carousel"') >= 0) {
+            var cs; try { cs = JSON.parse(c.content).carousel; } catch (e) { cs = null; }
+            if (cs && cs.slides && cs.slides.length) {
+              var ck = carousels.push(cs) - 1;
+              h += '<div class="card task"><div class="ch">Carousel · ' + cs.slides.length + ' slides</div><div class="slides">' + cs.slides.map(function (sl, si) { return '<canvas class="slide" width="216" height="270" data-car="' + ck + '" data-slide="' + si + '" aria-label="Slide ' + (si + 1) + ': ' + esc(sl.heading) + '"></canvas>'; }).join('') + '</div><div class="row"><button type="button" class="btn" data-cardl="' + ck + '">Save slide images</button></div></div>';
+            }
+            return;
+          }
           if (c.type !== 'tool_result' || typeof c.content !== 'string' || c.content.indexOf('"browser_task"') < 0) return;
           var bt; try { bt = JSON.parse(c.content).browser_task; } catch (e) { return; }
           if (!bt) return;
@@ -216,10 +224,13 @@
     if (busy) h += '<div class="act wait">Working…</div>';
     if (lastError) h += '<div class="m err"><span>' + esc(lastError) + '</span><button type="button" class="copy" id="retry">Try again</button></div>';
     $('log').innerHTML = h; $('log').scrollTop = $('log').scrollHeight;
+    var drawThumbs = function () { document.querySelectorAll('#log canvas.slide').forEach(function (cv) { drawSlide(cv, carousels[+cv.dataset.car], +cv.dataset.slide, 0.2); }); };
+    drawThumbs(); if (document.fonts && document.fonts.ready) document.fonts.ready.then(drawThumbs);
     var r = $('retry'); if (r) r.onclick = function () { lastError = null; step({}); };
     $('sendBtn').disabled = busy; $('stop').hidden = !busy;
   }
   $('log').addEventListener('click', function (e) {
+    var dl = e.target.closest('[data-cardl]'); if (dl) { saveCarousel(carousels[+dl.dataset.cardl], dl); return; }
     var cp = e.target.closest('[data-taskcopy]');
     if (cp) {
       e.stopPropagation();
@@ -652,6 +663,49 @@
   $('sleepBtn').onclick = goSleep;
   $('wakeBtn').onclick = function () { wakeUp('wake up'); };
   document.addEventListener('visibilitychange', function () { if (!document.hidden && asleep) keepAwake(); });
+
+  // ================= carousel slide images (1080×1350) =================
+  var logoImg = new Image(); logoImg.src = 'logo.png';
+  function wrapLines(ctx, text, maxW) {
+    var out = []; String(text || '').split('\n').forEach(function (para) {
+      var line = ''; para.split(/\s+/).forEach(function (w) { var t = line ? line + ' ' + w : w; if (ctx.measureText(t).width > maxW && line) { out.push(line); line = w; } else line = t; }); out.push(line);
+    }); return out;
+  }
+  function fitText(ctx, text, font, maxW, maxH, start, min, lh) {
+    var size = start, lines; do { ctx.font = font.replace('{s}', size); lines = wrapLines(ctx, text, maxW); if (lines.length * size * lh <= maxH) break; size -= 4; } while (size > min);
+    return { size: size, lines: lines };
+  }
+  function drawSlide(cv, car, i, scale) {
+    var ctx = cv.getContext('2d'), W = 1080, H = 1350, sl = car.slides[i], n = car.slides.length, blue = i === 0 || i === n - 1;
+    ctx.setTransform(scale, 0, 0, scale, 0, 0);
+    ctx.fillStyle = blue ? '#1F6FE0' : '#FFFFFF'; ctx.fillRect(0, 0, W, H);
+    if (!blue) { ctx.fillStyle = '#1F6FE0'; ctx.fillRect(0, 0, 18, H); ctx.fillRect(0, H - 120, W, 120); }
+    var pad = 110, ink = blue ? '#FFFFFF' : '#14263D';
+    var hd = fitText(ctx, sl.heading, '700 {s}px "Barlow Semi Condensed", Barlow, Arial, sans-serif', W - pad * 2, blue ? 640 : 480, blue ? 112 : 84, 44, 1.08);
+    var y = blue && !sl.body ? (H - hd.lines.length * hd.size * 1.08) / 2 : blue ? 300 : 230;
+    ctx.fillStyle = ink; ctx.textBaseline = 'top'; ctx.font = '700 ' + hd.size + 'px "Barlow Semi Condensed", Barlow, Arial, sans-serif';
+    hd.lines.forEach(function (l) { ctx.fillText(l, pad, y); y += hd.size * 1.08; });
+    if (sl.body) {
+      y += 50; var bd = fitText(ctx, sl.body, '500 {s}px Barlow, Arial, sans-serif', W - pad * 2, (blue ? H - 260 : H - 200) - y, 52, 30, 1.32);
+      ctx.fillStyle = blue ? 'rgba(255,255,255,.88)' : '#3E5068'; ctx.font = '500 ' + bd.size + 'px Barlow, Arial, sans-serif';
+      bd.lines.forEach(function (l) { ctx.fillText(l, pad, y); y += bd.size * 1.32; });
+    }
+    if (n > 1) { ctx.fillStyle = blue ? 'rgba(255,255,255,.75)' : '#5D6E82'; ctx.font = '600 34px Barlow, Arial, sans-serif'; ctx.textAlign = 'right'; ctx.fillText((i + 1) + ' / ' + n, W - pad, 90); ctx.textAlign = 'left'; }
+    if (logoImg.complete && logoImg.naturalWidth) { var lh = 64, lw = lh * logoImg.naturalWidth / logoImg.naturalHeight; ctx.drawImage(logoImg, pad, H - 92, lw, lh); }
+    else logoImg.onload = function () { drawSlide(cv, car, i, scale); };
+  }
+  function saveCarousel(car, btn) {
+    var fontsReady = document.fonts && document.fonts.load ? Promise.all([document.fonts.load('700 100px "Barlow Semi Condensed"'), document.fonts.load('500 50px Barlow')]).catch(function () {}) : Promise.resolve();
+    fontsReady.then(function () { saveCarouselNow(car, btn); });
+  }
+  function saveCarouselNow(car, btn) {
+    var files = car.slides.map(function (sl, i) { var cv = document.createElement('canvas'); cv.width = 1080; cv.height = 1350; drawSlide(cv, car, i, 1); return cv; });
+    Promise.all(files.map(function (cv, i) { return new Promise(function (ok) { cv.toBlob(function (b) { ok(new File([b], 'eltra-slide-' + (i + 1) + '.png', { type: 'image/png' })); }, 'image/png'); }); })).then(function (fs) {
+      if (navigator.canShare && navigator.canShare({ files: fs })) { navigator.share({ files: fs }).catch(function () {}); return; }   // iPhone/iPad: "Save Images" puts them in Photos
+      fs.forEach(function (f, i) { setTimeout(function () { var a = document.createElement('a'); a.href = URL.createObjectURL(f); a.download = f.name; document.body.appendChild(a); a.click(); a.remove(); }, i * 250); });
+      var old = btn.textContent; btn.textContent = 'Saved ' + fs.length + ' images'; setTimeout(function () { btn.textContent = old; }, 2500);
+    });
+  }
 
   // ================= photos and PDFs in the chat =================
   // Photos are shrunk on this device (long side 1600px) before sending. Once Eltra has answered, they're swapped for a short
