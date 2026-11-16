@@ -310,6 +310,9 @@
   .card.task details { margin-top: 8px; font-size: 14px; } .card.task summary { cursor: pointer; color: var(--blue); font-weight: 600; }
   .card.task a.btn { display: inline-flex; align-items: center; text-decoration: none; }
   /* to-do list */
+  .seg2 { display: inline-flex; background: var(--paper); border-radius: 999px; padding: 2px; margin-right: 6px; }
+  .seg2 button { font: inherit; font-size: 13px; font-weight: 600; color: var(--muted); background: transparent; border: 0; border-radius: 999px; padding: 4px 10px; min-height: 30px; cursor: pointer; }
+  .seg2 button[aria-pressed="true"] { background: #fff; color: var(--blue); box-shadow: 0 1px 2px rgba(20,38,61,.1); }
   .tsecs { display: flex; flex-wrap: wrap; gap: 6px; padding: 12px 0 10px; }
   .tsecs button { font: inherit; font-size: 14px; font-weight: 600; color: var(--muted); background: var(--paper); border: 0; border-radius: 999px; padding: 6px 12px; min-height: 36px; cursor: pointer; }
   .tsecs button[aria-selected="true"] { background: var(--blue-soft); color: var(--blue); }
@@ -386,12 +389,13 @@
 
 
   <section class="hud todo" aria-labelledby="todoH">
-    <div class="hh"><h2 id="todoH">To do</h2><small><button type="button" class="copy" id="todoEditSec">Edit sections</button></small></div>
+    <div class="hh"><h2 id="todoH">To do</h2><small><span class="seg2" id="todoWho" role="group" aria-label="Whose to-dos"><button type="button" data-who="mine" aria-pressed="true">Mine</button><button type="button" data-who="all" aria-pressed="false">Everyone</button></span><button type="button" class="copy" id="todoEditSec">Edit sections</button></small></div>
     <div class="hb">
       <div class="tsecs" id="todoSecs" role="tablist" aria-label="To-do sections"></div>
       <form class="tadd" id="todoForm">
         <label class="grow"><span class="sr">New to-do</span><input id="todoText" placeholder="Add a to-do…" autocomplete="off"></label>
         <label><span class="sr">Section</span><select id="todoSec"></select></label>
+        <label><span class="sr">For</span><select id="todoFor"><option value="me">For me</option><option value="will">For Will</option><option value="ethan">For Ethan</option><option value="both">For both</option></select></label>
         <label><span class="sr">Due date (optional)</span><input type="date" id="todoDue"></label>
         <button class="btn" type="submit">Add</button>
       </form>

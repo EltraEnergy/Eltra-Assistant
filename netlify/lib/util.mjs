@@ -1,6 +1,7 @@
 // Shared bits for the Eltra agent functions: JSON replies, the login session and the storage.
 import { createHmac, timingSafeEqual, createHash } from 'node:crypto';
 import { getStore } from '@netlify/blobs';
+import { AsyncLocalStorage } from 'node:async_hooks';
 
 export const json = (status, body, headers = {}) => new Response(JSON.stringify(body), {
   status, headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-store', ...headers }
@@ -20,28 +21,49 @@ function same(a, b) {
   return timingSafeEqual(x, y);
 }
 
+// Who can log in. Will: AGENT_PASSWORD. Ethan: ETHAN_PASSWORD. Each gets their own Google connection and greeting.
+export const USERS = { will: { name: 'Will', env: 'AGENT_PASSWORD' }, ethan: { name: 'Ethan', env: 'ETHAN_PASSWORD' } };
+// returns 'will' / 'ethan' for a correct password, otherwise null
 export function checkPassword(pw) {
-  const real = process.env.AGENT_PASSWORD;
-  return !!real && real.length >= 8 && same(pw || '', real);
+  for (const [id, u] of Object.entries(USERS)) {
+    const real = process.env[u.env];
+    if (real && real.length >= 8 && same(pw || '', real)) return id;
+  }
+  return null;
 }
-export function sessionCookie() {
+export function sessionCookie(user = 'will') {
   const exp = Date.now() + DAYS * 864e5;
-  const val = exp + '.' + sign('s:' + exp);
+  const val = user + '.' + exp + '.' + sign('s:' + user + ':' + exp);
   return COOKIE + '=' + val + '; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=' + DAYS * 86400;
 }
 export const clearCookie = () => COOKIE + '=; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=0';
 
-export function loggedIn(req) {
+// the logged-in person ('will' / 'ethan'), or null
+export function sessionUser(req) {
   const m = (req.headers.get('cookie') || '').match(new RegExp('(?:^|;\\s*)' + COOKIE + '=([^;]+)'));
-  if (!m) return false;
-  const [exp, sig] = m[1].split('.');
-  if (!exp || !sig || +exp < Date.now()) return false;
-  try { return same(sig, sign('s:' + exp)); } catch { return false; }
+  if (!m) return null;
+  const parts = m[1].split('.');
+  try {
+    if (parts.length === 2) { const [exp, sig] = parts; return +exp > Date.now() && same(sig, sign('s:' + exp)) ? 'will' : null; }   // logins from before Ethan existed
+    const [user, exp, sig] = parts;
+    if (!USERS[user] || !exp || +exp < Date.now()) return null;
+    return same(sig, sign('s:' + user + ':' + exp)) ? user : null;
+  } catch { return null; }
 }
+export const loggedIn = (req) => !!sessionUser(req);
+
+// Remember who this request is for, so Google calls and to-dos use the right person.
+const ctx = new AsyncLocalStorage();
+export const currentUser = () => (ctx.getStore() && ctx.getStore().user) || 'will';
+export const userName = (u = currentUser()) => (USERS[u] || USERS.will).name;
+export const runAs = (user, fn) => ctx.run({ user }, fn);
+
 // Every request that changes anything must come from the app itself (with the session cookie and this header).
 export function guard(req) {
-  if (!loggedIn(req)) return json(401, { error: 'Please log in' });
+  const user = sessionUser(req);
+  if (!user) return json(401, { error: 'Please log in' });
   if (req.method === 'POST' && req.headers.get('x-eltra') !== '1') return json(403, { error: 'Bad request' });
+  ctx.enterWith({ user });
   return null;
 }
 export const signState = (text) => sign('state:' + text);

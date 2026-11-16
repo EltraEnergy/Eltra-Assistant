@@ -1,14 +1,20 @@
 // To-do lists by section (DNSP, Quoting, Order stock, …), shared by the dashboard and Eltra.
-import { store } from './util.mjs';
+import { store, currentUser, USERS } from './util.mjs';
 import crypto from 'node:crypto';
 
 const KEY = 'todos';
-const DEFAULT_SECTIONS = ['DNSP', 'Quoting', 'Order stock', 'Admin'];
+const DEFAULT_SECTIONS = ['DNSP', 'Quoting', 'Order stock', 'Bookings', 'Accounts', 'Socials', 'Admin'];
+const ETHAN_SECTIONS = ['Bookings', 'Accounts', 'Socials'];
+// who a to-do is for: 'will', 'ethan' or 'both'
+export const ownerOf = (v) => { const x = String(v || '').toLowerCase(); return x === 'both' || x === 'everyone' || x === 'team' ? 'both' : USERS[x] ? x : x === 'me' ? currentUser() : currentUser(); };
 const str = (v, n) => String(v ?? '').trim().slice(0, n);
 
 export async function loadTodos() {
   const d = (await store().get(KEY, { type: 'json' })) || {};
-  return { sections: Array.isArray(d.sections) && d.sections.length ? d.sections : DEFAULT_SECTIONS.slice(), items: Array.isArray(d.items) ? d.items : [] };
+  const sections = Array.isArray(d.sections) && d.sections.length ? d.sections : DEFAULT_SECTIONS.slice();
+  if (!d.teamSections) ETHAN_SECTIONS.forEach((x) => { if (!sections.some((y) => y.toLowerCase() === x.toLowerCase())) sections.splice(Math.max(0, sections.length - 1), 0, x); });   // one-off: add Ethan's sections
+  const items = (Array.isArray(d.items) ? d.items : []).map((x) => (x.owner ? x : { ...x, owner: 'will' }));   // older to-dos were all Will's
+  return { sections, items, teamSections: true };
 }
 const save = (d) => store().setJSON(KEY, d);
 
@@ -18,15 +24,18 @@ function pickSection(d, name, create) {
   const low = n.toLowerCase();
   const hit = d.sections.find((s) => s.toLowerCase() === low) || d.sections.find((s) => s.toLowerCase().includes(low) || low.includes(s.toLowerCase()))
     || (/(stock|order|buy|supplier)/.test(low) && d.sections.find((s) => /stock/i.test(s))) || (/(quote|proposal|pylon)/.test(low) && d.sections.find((s) => /quot/i.test(s)))
-    || (/(dnsp|pre.?approval|grid|powercor|citipower|jemena|ausnet|united)/.test(low) && d.sections.find((s) => /dnsp/i.test(s)));
+    || (/(dnsp|pre.?approval|grid|powercor|citipower|jemena|ausnet|united)/.test(low) && d.sections.find((s) => /dnsp/i.test(s)))
+    || (/(book|schedul|install date|calendar)/.test(low) && d.sections.find((s) => /book/i.test(s)))
+    || (/(account|invoice|xero|myob|bill|payment|bas|gst)/.test(low) && d.sections.find((s) => /account/i.test(s)))
+    || (/(social|facebook|instagram|post|insta|fb)/.test(low) && d.sections.find((s) => /social/i.test(s)));
   if (hit) return hit;
   if (create) { d.sections.push(n); return n; }
   return d.sections[0];
 }
 
-export async function addTodo({ section, text, due, ref }) {
+export async function addTodo({ section, text, due, ref, owner }) {
   const d = await loadTodos();
-  const item = { id: crypto.randomUUID().slice(0, 8), section: pickSection(d, section, true), text: str(text, 300), due: /^\d{4}-\d{2}-\d{2}$/.test(due || '') ? due : '', ref: str(ref, 200), done: false, createdAt: new Date().toISOString() };
+  const item = { id: crypto.randomUUID().slice(0, 8), section: pickSection(d, section, true), text: str(text, 300), due: /^\d{4}-\d{2}-\d{2}$/.test(due || '') ? due : '', ref: str(ref, 200), owner: ownerOf(owner), by: currentUser(), done: false, createdAt: new Date().toISOString() };
   if (!item.text) throw new Error('A to-do needs some text');
   d.items.push(item); await save(d); return item;
 }
@@ -36,6 +45,7 @@ export async function updateTodo(id, patch) {
   if (patch.text !== undefined) it.text = str(patch.text, 300) || it.text;
   if (patch.section !== undefined) it.section = pickSection(d, patch.section, true);
   if (patch.due !== undefined) it.due = /^\d{4}-\d{2}-\d{2}$/.test(patch.due || '') ? patch.due : '';
+  if (patch.owner !== undefined) it.owner = ownerOf(patch.owner);
   if (patch.done !== undefined) { it.done = !!patch.done; it.doneAt = it.done ? new Date().toISOString() : undefined; }
   await save(d); return it;
 }

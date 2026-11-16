@@ -28,10 +28,12 @@
   // ================= login =================
   function showLogin() { $('appView').hidden = true; $('loginView').hidden = false; setTimeout(function () { $('pw').focus(); }, 50); }
   var started = false;
+  var me = { user: 'will', name: 'Will' };
+  var isEthan = function () { return me.user === 'ethan'; };
   function showApp() { $('loginView').hidden = true; $('appView').hidden = false; if (!started) { started = true; startApp(); } }
   $('loginForm').addEventListener('submit', function (e) {
     e.preventDefault(); $('loginErr').textContent = '';
-    api('login', { method: 'POST', body: { password: $('pw').value } }).then(function () { $('pw').value = ''; showApp(); }).catch(function (err) { $('loginErr').textContent = err.message; });
+    api('login', { method: 'POST', body: { password: $('pw').value } }).then(function (d) { if (d && d.user) me = { user: d.user, name: d.name }; $('pw').value = ''; showApp(); }).catch(function (err) { $('loginErr').textContent = err.message; });
   });
   $('logout').onclick = function () { api('login', { method: 'DELETE' }).catch(function () {}).then(showLogin); };
 
@@ -40,7 +42,7 @@
     var n = new Date(), h = +n.toLocaleString('en-AU', { timeZone: TZ, hour: 'numeric', hourCycle: 'h23' });
     $('clock').textContent = fmt(n, { hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23' });
     $('today').textContent = fmt(n, { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' }) + ' · Melbourne';
-    $('greet').textContent = (h < 12 ? 'Good morning' : h < 17 ? 'Good afternoon' : 'Good evening') + ', Will.';
+    $('greet').textContent = (h < 12 ? 'Good morning' : h < 17 ? 'Good afternoon' : 'Good evening') + ', ' + me.name + '.';
   }
 
   // ================= dashboard =================
@@ -376,7 +378,7 @@
   $('rate').oninput = function () { vs.rate = +$('rate').value; save('eltra-hud-voice', vs); showRate(); };
   $('speak').checked = vs.speak !== false; $('speak').onchange = function () { vs.speak = $('speak').checked; save('eltra-hud-voice', vs); if (!$('speak').checked) hush(); };
   $('convo').checked = !!vs.convo; $('convo').onchange = function () { vs.convo = $('convo').checked; save('eltra-hud-voice', vs); };
-  $('testVoice').onclick = function () { unlockAudio(); var was = $('speak').checked; $('speak').checked = true; speak('G’day Will, I’m Eltra. This is how I’ll sound when I read out your brief.'); $('speak').checked = was; };
+  $('testVoice').onclick = function () { unlockAudio(); var was = $('speak').checked; $('speak').checked = true; speak('G’day ' + me.name + ', I’m Eltra. This is how I’ll sound when I read out your brief.'); $('speak').checked = was; };
   try { speechSynthesis.addEventListener('voiceschanged', fillVoices); } catch (e) {}
 
   // ================= voice in: record, stop on silence, transcribe =================
@@ -581,12 +583,13 @@
     var n = new Date(), h = +n.toLocaleString('en-AU', { timeZone: TZ, hour: 'numeric', hourCycle: 'h23' });
     var t = String(said || '').toLowerCase();
     var tod = h < 5 ? 'evening' : h < 12 ? 'morning' : h < 17 ? 'afternoon' : 'evening';
-    var first = /\b(i'?m|im|i am) (home|back)\b|\bhome\b/.test(t) ? 'Welcome home, sir. Good ' + tod + '.'
-      : /\b(hello|hi|hey)\b/.test(t) && Math.random() < 0.5 ? 'Hello, sir. Good ' + tod + '.'
-      : 'Good ' + tod + ', sir.';
+    var sir = isEthan() ? 'Ethan' : 'sir';
+    var first = /\b(i'?m|im|i am) (home|back)\b|\bhome\b/.test(t) ? (isEthan() ? 'Welcome back, Ethan. Good ' + tod + '.' : 'Welcome home, sir. Good ' + tod + '.')
+      : /\b(hello|hi|hey)\b/.test(t) && Math.random() < 0.5 ? 'Hello, ' + sir + '. Good ' + tod + '.'
+      : 'Good ' + tod + ', ' + sir + '.';
     var bits = [], reply = parseInt($('sReply').textContent, 10);
     var tdy = new Date().toLocaleDateString('en-CA', { timeZone: TZ }), od = 0, dt = 0;
-    (todos.items || []).forEach(function (x) { if (!x.done && x.due) { if (x.due < tdy) od++; else if (x.due === tdy) dt++; } });
+    (todos.items || []).forEach(function (x) { if (!x.done && x.due && mine(x)) { if (x.due < tdy) od++; else if (x.due === tdy) dt++; } });
     if (od) bits.push(od === 1 ? 'one to-do is overdue' : od + ' to-dos are overdue');
     if (dt) bits.push(dt === 1 ? 'one to-do is due today' : dt + ' to-dos are due today');
     if (reply > 0) bits.push(reply === 1 ? 'one email needs a reply' : reply + ' emails need replies');
@@ -730,7 +733,9 @@
   };
 
   // ================= to-do list =================
-  var todos = { sections: [], items: [] }, todoTab = 'All', showDone = false;
+  var todos = { sections: [], items: [] }, todoTab = 'All', showDone = false, todoWho = 'mine';
+  function mine(x) { return !x.owner || x.owner === me.user || x.owner === 'both'; }
+  var OWNER = { will: 'Will', ethan: 'Ethan', both: 'Both' };
   function todoDueText(d) {
     if (!d) return null;
     var today = fmt(new Date(), { year: 'numeric', month: '2-digit', day: '2-digit' }).split('/').reverse().join('-');
@@ -741,7 +746,7 @@
   function renderTodos() {
     var secs = $('todoSecs'); secs.textContent = '';
     ['All'].concat(todos.sections).forEach(function (sname) {
-      var n = todos.items.filter(function (x) { return !x.done && (sname === 'All' || x.section === sname); }).length;
+      var n = todos.items.filter(function (x) { return !x.done && (todoWho === 'all' || mine(x)) && (sname === 'All' || x.section === sname); }).length;
       var b = document.createElement('button'); b.type = 'button'; b.setAttribute('role', 'tab'); b.setAttribute('aria-selected', sname === todoTab);
       b.innerHTML = esc(sname) + (n ? '<span class="n">' + n + '</span>' : '');
       b.onclick = function () { todoTab = sname; if (sname !== 'All') $('todoSec').value = sname; renderTodos(); };
@@ -750,7 +755,8 @@
     var sel = $('todoSec'), cur = sel.value; sel.textContent = '';
     todos.sections.forEach(function (sname) { var o = document.createElement('option'); o.textContent = sname; sel.appendChild(o); });
     sel.value = todoTab !== 'All' ? todoTab : (todos.sections.indexOf(cur) >= 0 ? cur : todos.sections[0]);
-    var inTab = todos.items.filter(function (x) { return todoTab === 'All' || x.section === todoTab; });
+    var inTab = todos.items.filter(function (x) { return (todoWho === 'all' || mine(x)) && (todoTab === 'All' || x.section === todoTab); });
+    $('todoWho').querySelectorAll('button').forEach(function (b) { b.setAttribute('aria-pressed', b.dataset.who === todoWho); });
     var open = inTab.filter(function (x) { return !x.done; }).sort(function (a, b) { return (a.due || '9999') < (b.due || '9999') ? -1 : (a.due || '9999') > (b.due || '9999') ? 1 : a.createdAt < b.createdAt ? -1 : 1; });
     var done = inTab.filter(function (x) { return x.done; }).sort(function (a, b) { return (b.doneAt || '') < (a.doneAt || '') ? -1 : 1; });
     var list = $('todoList'); list.textContent = '';
@@ -759,7 +765,7 @@
       var li = document.createElement('li'); if (it.done) li.className = 'done';
       var due = todoDueText(it.due);
       li.innerHTML = '<input type="checkbox"' + (it.done ? ' checked' : '') + ' aria-label="Done: ' + esc(it.text) + '">' +
-        '<span class="tt">' + esc(it.text) + ((todoTab === 'All' || it.ref) ? '<small>' + [todoTab === 'All' ? it.section : '', it.ref].filter(Boolean).map(esc).join(' · ') + '</small>' : '') + '</span>' +
+        '<span class="tt">' + esc(it.text) + '<small>' + [todoTab === 'All' ? it.section : '', it.ref, (it.owner && it.owner !== me.user) ? 'for ' + OWNER[it.owner] : ''].filter(Boolean).map(esc).join(' · ') + '</small></span>' +
         '<span class="due ' + (due && !it.done ? due.cls : '') + '">' + (due ? esc(due.txt) : '') + '</span>' +
         '<button type="button" class="x" aria-label="Delete: ' + esc(it.text) + '">×</button>';
       li.querySelector('input').onchange = function (ev) { todoCall({ action: 'update', id: it.id, done: ev.target.checked }); };
@@ -775,9 +781,10 @@
   function loadTodos() { return api('todos').then(function (d) { todos = d; renderTodos(); }).catch(function () {}); }
   $('todoForm').onsubmit = function (e) {
     e.preventDefault(); var t = $('todoText').value.trim(); if (!t) return;
-    todoCall({ action: 'add', text: t, section: $('todoSec').value, due: $('todoDue').value }).then(function () { $('todoText').value = ''; $('todoDue').value = ''; $('todoText').focus(); });
+    todoCall({ action: 'add', text: t, section: $('todoSec').value, due: $('todoDue').value, owner: $('todoFor').value }).then(function () { $('todoText').value = ''; $('todoDue').value = ''; $('todoText').focus(); });
   };
   $('todoShowDone').onclick = function () { showDone = !showDone; renderTodos(); };
+  $('todoWho').querySelectorAll('button').forEach(function (b) { b.onclick = function () { todoWho = b.dataset.who; renderTodos(); }; });
   $('todoEditSec').onclick = function () {
     var v = prompt('Sections, separated by commas:', todos.sections.join(', '));
     if (v === null) return;
@@ -791,5 +798,5 @@
     api('speak').then(function (d) { voices = d; fillVoices(); }).catch(function () { voices = { configured: false }; fillVoices(); });
     if (/google=connected/.test(location.search)) history.replaceState(null, '', '/');
   }
-  api('login').then(function (d) { if (d.loggedIn) showApp(); else showLogin(); }).catch(showLogin);
+  api('login').then(function (d) { if (d.loggedIn) { if (d.user) me = { user: d.user, name: d.name }; showApp(); } else showLogin(); }).catch(showLogin);
 })();

@@ -1,32 +1,35 @@
-// Connect Will's Google account once. GET ?start=1 sends him to Google; Google sends him back here with a code,
-// which is swapped for a refresh token and kept in Netlify Blobs (never shown anywhere).
-import { json, loggedIn, signState, store } from '../lib/util.mjs';
-import { SCOPES } from '../lib/google.mjs';
+// Connect Google for the person who's logged in (Will → Will's account, Ethan → Ethan's account).
+// Start:    /.netlify/functions/google-auth?start=1
+// Callback: Google sends people back here with ?code=…&state=…
+// The redirect URI registered in Google Cloud stays: https://<site>/.netlify/functions/google-auth
+import { sessionUser, signState, store, USERS } from '../lib/util.mjs';
+import { SCOPES, googleKey } from '../lib/google.mjs';
 
-const page = (msg) => new Response('<!doctype html><meta name="viewport" content="width=device-width"><body style="font-family:-apple-system,Arial,sans-serif;padding:30px;max-width:520px;margin:auto"><p>' + msg + '</p><p><a href="/">Back to the dashboard</a></p></body>', { headers: { 'Content-Type': 'text/html; charset=utf-8' } });
+const page = (title, body) => new Response('<!doctype html><meta name="viewport" content="width=device-width,initial-scale=1"><title>' + title + '</title><body style="font-family:-apple-system,Segoe UI,Arial,sans-serif;max-width:480px;margin:15vh auto;padding:0 20px;text-align:center;color:#14263D"><h1 style="font-size:22px">' + title + '</h1><p>' + body + '</p><p><a href="/" style="color:#1F6FE0">Back to the dashboard</a></p></body>', { status: 200, headers: { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' } });
 
 export default async (req) => {
-  const url = new URL(req.url), id = process.env.GOOGLE_CLIENT_ID, secret = process.env.GOOGLE_CLIENT_SECRET;
-  const redirect = url.origin + '/.netlify/functions/google-auth';
-  if (!id || !secret) return page('Google isn’t set up yet: add GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET in Netlify.');
-  if (!loggedIn(req)) return page('Please log in to the dashboard first.');
+  const url = new URL(req.url), redirect = url.origin + url.pathname;
+  const id = process.env.GOOGLE_CLIENT_ID, secret = process.env.GOOGLE_CLIENT_SECRET;
+  if (!id || !secret) return page('Google isn’t set up', 'Add GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET in Netlify first.');
 
   if (url.searchParams.get('start')) {
-    const nonce = Date.now().toString(36);
-    const state = nonce + '.' + signState(nonce);
-    const p = new URLSearchParams({ client_id: id, redirect_uri: redirect, response_type: 'code', scope: SCOPES.join(' '), access_type: 'offline', prompt: 'consent', include_granted_scopes: 'true', state });
-    return new Response(null, { status: 302, headers: { Location: 'https://accounts.google.com/o/oauth2/v2/auth?' + p } });
+    const user = sessionUser(req);
+    if (!user) return page('Please log in first', 'Log in to the dashboard, then tap Connect Google again.');
+    const raw = user + '.' + Date.now();
+    const q = new URLSearchParams({ client_id: id, redirect_uri: redirect, response_type: 'code', scope: SCOPES.join(' '), access_type: 'offline', prompt: 'consent select_account', include_granted_scopes: 'true', state: raw + '.' + signState(raw) });
+    return Response.redirect('https://accounts.google.com/o/oauth2/v2/auth?' + q.toString(), 302);
   }
 
+  if (url.searchParams.get('error')) return page('Google didn’t connect', 'Google said: ' + url.searchParams.get('error').replace(/_/g, ' ') + '.');
   const code = url.searchParams.get('code'), state = url.searchParams.get('state') || '';
-  if (url.searchParams.get('error')) return page('Google said: ' + url.searchParams.get('error') + '. Nothing was changed.');
-  const [nonce, sig] = state.split('.');
-  if (!code || !nonce || sig !== signState(nonce) || Date.now() - parseInt(nonce, 36) > 15 * 60000) return page('That link has expired. Go back and tap Connect Google again.');
+  const [user, ts, sig] = state.split('.');
+  if (!code || !USERS[user] || !sig || sig !== signState(user + '.' + ts) || Date.now() - +ts > 15 * 60000) return page('That link has expired', 'Go back to the dashboard and tap Connect Google again.');
+
   const res = await fetch('https://oauth2.googleapis.com/token', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams({ code, client_id: id, client_secret: secret, redirect_uri: redirect, grant_type: 'authorization_code' }) });
-  const out = await res.json().catch(() => ({}));
-  if (!res.ok || !out.refresh_token) return page('Couldn’t connect Google (' + (out.error_description || out.error || 'no refresh token') + '). Try again.');
+  const tok = await res.json().catch(() => ({}));
+  if (!res.ok || !tok.refresh_token) return page('Google didn’t connect', (tok.error_description || tok.error || 'No access was granted') + '. Try Connect Google again and tick every permission.');
   let email = null;
-  try { email = JSON.parse(Buffer.from(String(out.id_token).split('.')[1], 'base64url').toString()).email; } catch {}
-  await store().setJSON('google', { refresh_token: out.refresh_token, email, at: Date.now() });
+  try { email = JSON.parse(Buffer.from(String(tok.id_token).split('.')[1], 'base64url').toString()).email; } catch {}
+  await store().setJSON(googleKey(user), { refresh_token: tok.refresh_token, email, connectedAt: new Date().toISOString() });
   return new Response(null, { status: 302, headers: { Location: '/?google=connected' } });
 };

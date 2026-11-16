@@ -1,6 +1,9 @@
-// Google (Gmail, Calendar, Drive) for Will's account. The refresh token is stored in Netlify Blobs after
-// Will connects once through google-auth. Needs GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET.
-import { store } from './util.mjs';
+// Google (Gmail, Calendar, Drive) for whoever is logged in: Will's account for Will, Ethan's for Ethan.
+// Each person's refresh token is stored after they connect once through google-auth. Needs GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET.
+import { store, currentUser } from './util.mjs';
+
+// Will's token keeps its original key so his existing connection carries on working
+export const googleKey = (user = currentUser()) => (user === 'will' ? 'google' : 'google:' + user);
 
 export const SCOPES = [
   'https://www.googleapis.com/auth/gmail.modify',
@@ -9,17 +12,18 @@ export const SCOPES = [
   'openid', 'email'
 ];
 
-let cache = null; // { token, exp }
+const cache = {}; // per person: { token, exp }
 
 export async function googleStatus() {
   if (!process.env.GOOGLE_CLIENT_ID || !process.env.GOOGLE_CLIENT_SECRET) return { setUp: false, connected: false };
-  const g = await store().get('google', { type: 'json' }).catch(() => null);
+  const g = await store().get(googleKey(), { type: 'json' }).catch(() => null);
   return { setUp: true, connected: !!(g && g.refresh_token), email: g && g.email };
 }
 
 export async function accessToken() {
-  if (cache && cache.exp > Date.now() + 60000) return cache.token;
-  const g = await store().get('google', { type: 'json' });
+  const u = currentUser(), c = cache[u];
+  if (c && c.exp > Date.now() + 60000) return c.token;
+  const g = await store().get(googleKey(u), { type: 'json' });
   if (!g || !g.refresh_token) throw new Error('Google isn’t connected yet. Tap Connect Google on the dashboard.');
   const res = await fetch('https://oauth2.googleapis.com/token', {
     method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
@@ -30,8 +34,8 @@ export async function accessToken() {
     if (out.error === 'invalid_grant') throw new Error('Google access has expired. Tap Connect Google on the dashboard to reconnect.');
     throw new Error('Google sign-in failed (' + (out.error_description || out.error || res.status) + ')');
   }
-  cache = { token: out.access_token, exp: Date.now() + (out.expires_in || 3600) * 1000 };
-  return cache.token;
+  cache[u] = { token: out.access_token, exp: Date.now() + (out.expires_in || 3600) * 1000 };
+  return cache[u].token;
 }
 
 // Calls a Google API and returns parsed JSON (or text for non-JSON responses).

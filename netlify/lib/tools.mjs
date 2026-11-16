@@ -1,6 +1,7 @@
 // The agent's tools. "action" tools change something (send, move, create) and only run after Will taps Approve.
 import { g, GMAIL, CAL, DRIVE, DRIVE_UP, accessToken } from './google.mjs';
 import { loadTodos, addTodo, updateTodo } from './todos.mjs';
+import { currentUser } from './util.mjs';
 import { loadPrefs, portalFor } from './prefs.mjs';
 import { tz, clip, melbToDate, melbToday } from './util.mjs';
 
@@ -556,25 +557,26 @@ tool({
 // ---------- To-do list (sections like DNSP, Quoting, Order stock) ----------
 tool({
   name: 'todo_list', group: 'core',
-  description: 'Show Will\'s to-do list. Optionally one section (e.g. "DNSP", "Quoting", "Order stock", "Admin"). Includes ids for ticking things off.',
-  input_schema: { type: 'object', properties: { section: { type: 'string' }, include_done: { type: 'boolean' } } },
-  async run({ section, include_done }) {
-    const d = await loadTodos(), low = String(section || '').toLowerCase();
-    const items = d.items.filter((x) => (include_done || !x.done) && (!low || x.section.toLowerCase().includes(low) || low.includes(x.section.toLowerCase())));
-    return { sections: d.sections, items: items.map((x) => ({ id: x.id, section: x.section, text: x.text, due: x.due || undefined, done: x.done || undefined, ref: x.ref || undefined })) };
+  description: 'Show the to-do list. By default only the ones for the person you are talking to (and shared ones); whose: "everyone" shows the whole team\'s, "will" or "ethan" one person\'s. Optionally one section (e.g. "DNSP", "Quoting", "Order stock", "Bookings", "Accounts", "Socials", "Admin"). Includes ids for ticking things off.',
+  input_schema: { type: 'object', properties: { section: { type: 'string' }, include_done: { type: 'boolean' }, whose: { type: 'string', enum: ['mine', 'everyone', 'will', 'ethan'] } } },
+  async run({ section, include_done, whose }) {
+    const d = await loadTodos(), low = String(section || '').toLowerCase(), me = currentUser();
+    const want = whose === 'everyone' ? null : whose === 'will' || whose === 'ethan' ? whose : me;
+    const items = d.items.filter((x) => (include_done || !x.done) && (!want || x.owner === want || x.owner === 'both') && (!low || x.section.toLowerCase().includes(low) || low.includes(x.section.toLowerCase())));
+    return { sections: d.sections, items: items.map((x) => ({ id: x.id, section: x.section, text: x.text, for: x.owner, due: x.due || undefined, done: x.done || undefined, ref: x.ref || undefined })) };
   }
 });
 tool({
   name: 'todo_add', group: 'core',
-  description: 'Add a to-do for Will. section: DNSP (pre-approvals, grid connections), Quoting, Order stock, Admin, or a new section name. due: YYYY-MM-DD if he gave a day. ref: customer or job it relates to.',
-  input_schema: { type: 'object', properties: { text: { type: 'string' }, section: { type: 'string' }, due: { type: 'string' }, ref: { type: 'string' } }, required: ['text'] },
-  async run(i) { const it = await addTodo(i); return { added: it }; }
+  description: 'Add a to-do. section: DNSP (pre-approvals, grid connections), Quoting, Order stock, Bookings (booking installs), Accounts (invoices, Xero/MYOB), Socials (Facebook/Instagram), Admin, or a new section name. for: "me" (default, the person you are talking to), "will", "ethan" or "both". due: YYYY-MM-DD if a day was given. ref: customer or job it relates to.',
+  input_schema: { type: 'object', properties: { text: { type: 'string' }, section: { type: 'string' }, for: { type: 'string', enum: ['me', 'will', 'ethan', 'both'] }, due: { type: 'string' }, ref: { type: 'string' } }, required: ['text'] },
+  async run(i) { const it = await addTodo({ ...i, owner: i.for }); return { added: it }; }
 });
 tool({
   name: 'todo_update', group: 'core',
   description: 'Tick off (done: true), reopen, rename, move or re-date a to-do by id (get ids from todo_list).',
-  input_schema: { type: 'object', properties: { id: { type: 'string' }, done: { type: 'boolean' }, text: { type: 'string' }, section: { type: 'string' }, due: { type: 'string' } }, required: ['id'] },
-  async run({ id, ...patch }) { const it = await updateTodo(id, patch); return { updated: it }; }
+  input_schema: { type: 'object', properties: { id: { type: 'string' }, done: { type: 'boolean' }, text: { type: 'string' }, section: { type: 'string' }, due: { type: 'string' }, for: { type: 'string', enum: ['will', 'ethan', 'both'] } }, required: ['id'] },
+  async run({ id, for: f, ...patch }) { if (f) patch.owner = f; const it = await updateTodo(id, patch); return { updated: it }; }
 });
 
 // ---------- Read a power bill, CES or other PDF/photo (Drive file or email attachment) ----------

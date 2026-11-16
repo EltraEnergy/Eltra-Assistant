@@ -13,10 +13,10 @@ const dayPlus = (n) => { const d = new Date(Date.now() + n * 864e5); return d.to
 function signedTasks(name, design) {
   const kit = design ? [design.panels.join('; '), design.inverters.join('; '), design.batteries.join('; ')].filter(Boolean).join(' · ') : '';
   return [
-    { section: 'Admin', text: 'Send ' + name + ' the welcome / next steps email', due: dayPlus(0) },
-    { section: 'Admin', text: 'Book the install date with ' + name, due: dayPlus(1) },
-    { section: 'DNSP', text: 'Lodge the DNSP pre-approval for ' + name, due: dayPlus(1) },
-    { section: 'Order stock', text: 'Order stock for ' + name + (kit ? ': ' + kit : ''), due: dayPlus(2) }
+    { section: 'Admin', text: 'Send ' + name + ' the welcome / next steps email', due: dayPlus(0), owner: 'ethan' },
+    { section: 'Bookings', text: 'Book the install date with ' + name, due: dayPlus(1), owner: 'ethan' },
+    { section: 'DNSP', text: 'Lodge the DNSP pre-approval for ' + name, due: dayPlus(1), owner: 'will' },
+    { section: 'Order stock', text: 'Order stock for ' + name + (kit ? ': ' + kit : ''), due: dayPlus(2), owner: 'ethan' }
   ];
 }
 
@@ -44,7 +44,7 @@ export async function runAutomations({ force = false } = {}) {
     const age = (Date.now() - Date.parse(attrs.created_at || 0)) / 864e5;
     if (!p.sold && attrs.is_committed && p.primary_design_id && age >= 3 && age <= 21 && !s.followed.includes(p.id)) {
       s.followed.push(p.id);
-      added.push(await addTodo({ section: 'Quoting', text: 'Follow up ' + name + '’s proposal (sent ' + Math.round(age) + ' days ago, not signed yet)', due: dayPlus(0), ref: name + ' · auto' }));
+      added.push(await addTodo({ owner: 'will', section: 'Quoting', text: 'Follow up ' + name + '’s proposal (sent ' + Math.round(age) + ' days ago, not signed yet)', due: dayPlus(0), ref: name + ' · auto' }));
     }
   }
   s.signed = s.signed.slice(-500); s.followed = s.followed.slice(-500); s.lastRun = new Date().toISOString();
