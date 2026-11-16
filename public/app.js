@@ -169,6 +169,8 @@
     });
     return out + (inList ? '</ul>' : '');
   }
+  // Eltra's own bookkeeping notes about searches (kept for her, not shown or read out)
+  function isNote(t) { return /^\[(Searched the web|Search results used|Sources cited)/.test(String(t || '').trim()); }
   var taskCards = [], carousels = [];
   function render() {
     var h = ''; taskCards = []; carousels = [];
@@ -212,7 +214,7 @@
         return;
       }
       (m.content || []).forEach(function (c) {
-        if (c.type === 'text' && c.text.trim()) h += '<div class="m ai">' + md(c.text) + '</div>';
+        if (c.type === 'text' && c.text.trim() && !isNote(c.text)) h += '<div class="m ai">' + md(c.text) + '</div>';
         else if (c.type === 'tool_use') {
           var r = chat.results[c.id];
           if (r) h += '<div class="card done"><div class="ch">' + esc(r.title) + '</div><div class="res ' + (r.ok ? 'ok' : 'no') + '">' + (r.ok ? '✓ Approved' : '✕ Cancelled') + '</div></div>';
@@ -303,7 +305,7 @@
       if (chat.pending) { var t = chat.pending; chat.pending = null; ask(t); return; }
       render();
       var last = chat.messages[chat.messages.length - 1];
-      var text = last && last.role === 'assistant' ? (last.content || []).filter(function (c) { return c.type === 'text'; }).map(function (c) { return c.text; }).join(' ') : '';
+      var text = last && last.role === 'assistant' ? (last.content || []).filter(function (c) { return c.type === 'text' && !isNote(c.text); }).map(function (c) { return c.text; }).join(' ') : '';
       if (JSON.stringify(chat.messages.slice(-6)).indexOf('todo_') >= 0) loadTodos();
       if (text && !$('speak').checked) openDrawer('chat'); else if (text && $('chatDrawer').hidden) $('chatBtn').classList.add('has');
       if (text) speak(text, asksSomething(text)); else setState('idle', 'Ready');

@@ -25,7 +25,8 @@ function systemPrompt(gs) {
     'Call him Ethan. Do not call him "sir". Keep the same calm, helpful tone.',
     'For Ethan’s morning brief lead with: his to-dos (todo_list: Order stock, Install dates, Accounts and Socials), newly signed jobs that need stock ordered or an install date set, invoices to send or chase (pylon_find_projects with sold_only), supplier and customer emails in his inbox, and jobs coming up.',
     'Instagram account: if the instagram_ tools are available, Eltra is connected to the Eltra Energy Instagram. You can post photos and carousels (instagram_post, approved first), read real numbers (instagram_insights, use them for ig-audit instead of asking for screenshots), and read, reply to and hide comments. Photos Ethan attaches come with a "saved for posting" link; carousels made with instagram_carousel get a "Post to Instagram" button on their card that sends you the slide links. Reels and stories still have to be posted from the Instagram app.',
-    'Socials: for any Instagram work (captions, carousels, Reels, stories, the week\'s plan, comments, replies, DMs, profile, reviewing posts) first load the matching guide with instagram_skill and follow it, use the saved brand voice, and run every draft through instagram_humanize before showing it. Facebook posts can reuse the Instagram caption. He posts them himself; you can’t post for him.',
+    'Instagram work must be quick: load each guide once per chat (if its text is already earlier in this chat, use it without loading again); don\'t ask questions you can reasonably assume, draft first and offer tweaks after; run instagram_humanize once and only go round again if it says FLAGGED; call independent tools together in one step rather than one after another. For research, go straight to instagram_research with sensible accounts unless Ethan named some, then report.',
+        'Socials: for any Instagram work (captions, carousels, Reels, stories, the week\'s plan, comments, replies, DMs, profile, reviewing posts) first load the matching guide with instagram_skill and follow it, use the saved brand voice, and run every draft through instagram_humanize before showing it. Facebook posts can reuse the Instagram caption. He posts them himself; you can’t post for him.',
     'Accounts: Xero and MYOB aren’t connected to you yet. Help with what you can (find invoices and supplier bills in his email, work out amounts from the pricing sheet, keep to-dos) and say plainly when something needs doing in Xero or MYOB.',
     'New to-dos you add for Ethan are his unless he says they’re for Will.',
     ''
@@ -44,6 +45,7 @@ function systemPrompt(gs) {
     '- For a morning brief: today’s calendar and scheduled jobs, overdue and due-today to-dos (todo_list), unread emails that need Will (skip newsletters and notifications), new or stuck leads, and anything to follow up. Lead with what needs action.',
     '- To-dos marked auto were created automatically when a job was signed or a proposal went quiet. When Will finishes something you helped with (lodged a pre-approval, sent a follow-up), offer to tick the matching to-do off.',
     '- Will may attach photos or PDFs (switchboards, meter boxes, roofs, bills, CES certificates, site notes). Look closely and use what you see: read model numbers, ratings and labels exactly, say plainly when something is too blurry to read, and never guess serial numbers or NMIs. Photos are only kept for the reply you are writing now, so put any details he will need later into your answer.',
+    '- Earlier in a chat, the full results of tools and web searches are trimmed to save space; your earlier figures came from them (look for [Searched the web…], [Search results used…] and tool results). Don\'t apologise for or disown earlier figures unless you can see they were actually wrong; if you need the detail again, just look it up again.',
     '- When something fails, say what failed in plain words and what Will can do about it.'
   ]).join('\n');
 }
@@ -148,7 +150,15 @@ export default async (req) => {
   // Claude's own web search (for research such as what's working on Instagram). Turned off automatically if the
   // Anthropic account doesn't allow it, or with WEB_SEARCH=off in Netlify.
   let search = process.env.WEB_SEARCH !== 'off';
-  const body = (model) => JSON.stringify({ model, max_tokens: 3500, system: [{ type: 'text', text: systemPrompt(gs) + (search ? '\n- You can search the web (web_search) for current information: research, trends, product details, regulations. Say where facts came from.' : ''), cache_control: { type: 'ephemeral' } }], tools: search ? tools.concat([{ type: 'web_search_20250305', name: 'web_search', max_uses: 4, user_location: { type: 'approximate', city: 'Melbourne', region: 'Victoria', country: 'AU', timezone: 'Australia/Melbourne' } }]) : tools, messages });
+  // Mark the end of the conversation as cacheable, so the next step re-reads it from cache (much faster for long chats
+  // that include skill guides). The stored messages are not changed.
+  const sendMsgs = messages.map((m, i) => {
+    if (i !== messages.length - 1) return m;
+    const blocks = typeof m.content === 'string' ? [{ type: 'text', text: m.content }] : m.content.map((c) => ({ ...c }));
+    if (blocks.length) blocks[blocks.length - 1] = { ...blocks[blocks.length - 1], cache_control: { type: 'ephemeral' } };
+    return { ...m, content: blocks };
+  });
+  const body = (model) => JSON.stringify({ model, max_tokens: 3500, system: [{ type: 'text', text: systemPrompt(gs) + (search ? '\n- You can search the web (web_search) for current information: research, trends, product details, regulations. Say where facts came from.' : ''), cache_control: { type: 'ephemeral' } }], tools: search ? tools.concat([{ type: 'web_search_20250305', name: 'web_search', max_uses: 4, user_location: { type: 'approximate', city: 'Melbourne', region: 'Victoria', country: 'AU', timezone: 'Australia/Melbourne' } }]) : tools, messages: sendMsgs });
   let res, out;
   try {
     let model = await pickModel(key);
@@ -165,7 +175,20 @@ export default async (req) => {
     const msg = out && out.error && out.error.message ? out.error.message : 'HTTP ' + res.status;
     return json(502, { error: 'Claude error: ' + msg, messages });
   }
-  const reply = { role: 'assistant', content: out.content.filter((c) => c.type === 'text' || c.type === 'tool_use').map((c) => c.type === 'text' ? { type: 'text', text: c.text } : { type: 'tool_use', id: c.id, name: c.name, input: c.input }) };
+  // Keep what Claude said and the tools it asked for. Web searches run inside this one call and their raw results are
+  // large, so keep a short note of each search (query and sources) instead, so later turns can see where facts came from.
+  const content = [], sources = [];
+  for (const c of out.content) {
+    if (c.type === 'text') { content.push({ type: 'text', text: c.text }); (c.citations || []).forEach((x) => { if (x.url && !sources.includes(x.url)) sources.push(x.url); }); }
+    else if (c.type === 'tool_use') content.push({ type: 'tool_use', id: c.id, name: c.name, input: c.input });
+    else if (c.type === 'server_tool_use' && c.name === 'web_search') content.push({ type: 'text', text: '[Searched the web for: "' + clip((c.input && c.input.query) || '', 160) + '"]' });
+    else if (c.type === 'web_search_tool_result' && Array.isArray(c.content)) {
+      const hits = c.content.filter((r) => r.url).slice(0, 5).map((r) => clip(r.title || '', 80) + ' (' + r.url + ')');
+      if (hits.length) content.push({ type: 'text', text: '[Search results used: ' + hits.join('; ') + ']' });
+    }
+  }
+  if (sources.length) content.push({ type: 'text', text: '[Sources cited: ' + sources.slice(0, 8).join(' ') + ']' });
+  const reply = { role: 'assistant', content };
   if (!reply.content.length) reply.content = [{ type: 'text', text: 'Done.' }];
   messages.push(reply);
 

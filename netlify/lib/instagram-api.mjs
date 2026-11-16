@@ -84,22 +84,19 @@ export async function recentPosts(limit = 10) {
   const acct = await graph(id, { params: { fields: 'username,followers_count,follows_count,media_count' } }).catch(() => ({}));
   const media = await graph(id + '/media', { params: { fields: 'id,caption,media_type,media_product_type,timestamp,permalink,like_count,comments_count', limit: String(Math.min(25, limit)) } });
   const sets = ['reach,saved,shares,views,total_interactions', 'reach,saved,shares,total_interactions', 'reach,saved'];
-  const posts = [];
-  for (const m of media.data || []) {
+  const posts = await Promise.all((media.data || []).map(async (m) => {
     let ins = {};
     for (const metric of sets) { try { const r = await graph(m.id + '/insights', { params: { metric } }); (r.data || []).forEach((x) => { ins[x.name] = x.values ? x.values[0].value : x.total_value && x.total_value.value; }); break; } catch {} }
-    posts.push({ id: m.id, when: (m.timestamp || '').slice(0, 10), type: m.media_product_type === 'REELS' ? 'Reel' : m.media_type === 'CAROUSEL_ALBUM' ? 'Carousel' : 'Post', caption: String(m.caption || '').slice(0, 120), likes: m.like_count, comments: m.comments_count, ...ins, link: m.permalink });
-  }
+    return { id: m.id, when: (m.timestamp || '').slice(0, 10), type: m.media_product_type === 'REELS' ? 'Reel' : m.media_type === 'CAROUSEL_ALBUM' ? 'Carousel' : 'Post', caption: String(m.caption || '').slice(0, 120), likes: m.like_count, comments: m.comments_count, ...ins, link: m.permalink };
+  }));
   return { account: acct, posts };
 }
 export async function listComments({ media_id, limit = 10 }) {
   const id = await igId();
   const media = media_id ? [{ id: media_id }] : ((await graph(id + '/media', { params: { fields: 'id,caption,timestamp', limit: String(limit) } })).data || []);
   const out = [];
-  for (const m of media) {
-    const c = await graph(m.id + '/comments', { params: { fields: 'id,text,username,timestamp,hidden,replies{id,text,username,timestamp}', limit: '50' } }).catch(() => ({ data: [] }));
-    (c.data || []).forEach((x) => out.push({ comment_id: x.id, post: m.caption ? String(m.caption).slice(0, 60) : m.id, from: x.username, text: x.text, when: x.timestamp, hidden: x.hidden || undefined, replies: (x.replies && x.replies.data || []).map((r) => r.username + ': ' + r.text) }));
-  }
+  const lists = await Promise.all(media.map((m) => graph(m.id + '/comments', { params: { fields: 'id,text,username,timestamp,hidden,replies{id,text,username,timestamp}', limit: '50' } }).catch(() => ({ data: [] })).then((c) => ({ m, c }))));
+  lists.forEach(({ m, c }) => (c.data || []).forEach((x) => out.push({ comment_id: x.id, post: m.caption ? String(m.caption).slice(0, 60) : m.id, from: x.username, text: x.text, when: x.timestamp, hidden: x.hidden || undefined, replies: (x.replies && x.replies.data || []).map((r) => r.username + ': ' + r.text) })));
   return { comments: out.sort((a, b) => (b.when || '').localeCompare(a.when || '')).slice(0, 40) };
 }
 export const replyComment = ({ comment_id, message }) => graph(comment_id + '/replies', { method: 'POST', params: { message } }).then((r) => ({ replied: true, id: r.id }));
@@ -110,15 +107,15 @@ export const hideComment = ({ comment_id, hide = true }) => graph(comment_id, { 
 export async function researchAccounts(handles, perAccount = 12) {
   const id = await igId(), out = [], problems = [];
   if (id === 'me') return { rows: [], problems: ['Looking up other accounts isn’t available with this kind of Instagram token. Use instagram_research_in_browser (Claude in Chrome) instead.'] };
-  for (const raw of (handles || []).slice(0, 12)) {
-    const h = String(raw || '').replace(/^@/, '').trim(); if (!h) continue;
+  await Promise.all((handles || []).slice(0, 12).map(async (raw) => {
+    const h = String(raw || '').replace(/^@/, '').trim(); if (!h) return;
     try {
       const d = await graph(id, { params: { fields: 'business_discovery.username(' + h + '){username,followers_count,media.limit(' + Math.min(25, perAccount) + '){caption,like_count,comments_count,media_type,media_product_type,timestamp,permalink}}' } });
       const bd = d.business_discovery || {}, posts = (bd.media && bd.media.data) || [];
-      const eng = posts.map((m) => (m.like_count || 0) + (m.comments_count || 0)).filter((n) => n >= 0).sort((a, b) => a - b);
+      const eng = posts.map((m) => (m.like_count || 0) + (m.comments_count || 0)).sort((a, b) => a - b);
       const med = eng.length ? (eng.length % 2 ? eng[(eng.length - 1) / 2] : (eng[eng.length / 2 - 1] + eng[eng.length / 2]) / 2) : 0;
       posts.forEach((m) => out.push({ account: '@' + (bd.username || h), followers: String(bd.followers_count || ''), median: String(Math.max(1, Math.round(med))), views: String((m.like_count || 0) + (m.comments_count || 0)), hook: String(m.caption || '').split('\n').find((l) => l.trim()) || '(no caption)', type: m.media_product_type === 'REELS' ? 'Reel' : m.media_type === 'CAROUSEL_ALBUM' ? 'Carousel' : 'Post', when: (m.timestamp || '').slice(0, 10), link: m.permalink }));
-    } catch (e) { problems.push('@' + h + ': ' + (/(not.*found|does not exist|cannot be found|business)/i.test(e.message) ? 'not found, or it is a personal account (only business and creator accounts can be looked up)' : e.message)); }
-  }
+    } catch (e) { problems.push('@' + h + ': ' + e.message.replace(/^Instagram: /, '') + (/(cannot be found|does not exist|invalid user)/i.test(e.message) ? ' (only business and creator accounts can be looked up; check the handle)' : '')); }
+  }));
   return { rows: out, problems };
 }

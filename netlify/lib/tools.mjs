@@ -808,6 +808,8 @@ tool({
     const ranked = swipeFile(rows);
     const extra = Object.fromEntries(rows.map((x) => [x.hook + '|' + x.account, x]));
     if (ranked.reels) ranked.reels = ranked.reels.slice(0, 25).map((x) => { const e = extra[x.hook + '|' + x.account] || {}; return { multiple: x.multiple, account: x.account, engagement: x.views, type: e.type, when: e.when, formula: x.formula, hook_score: x.hook_score, hook: x.hook, link: e.link }; });
+    const blocked = !r.rows.length && r.problems.some((p) => /permission|\(#10\)|\(#200\)|not authorized|advanced access/i.test(p));
+    if (blocked) return { could_not_read: r.problems, next_step: 'Meta hasn\'t switched on looking up other accounts for this app yet (it needs Meta\'s App Review). Tell Ethan in one line, then straight away prepare the Claude in Chrome version with instagram_research_in_browser for the same accounts.' };
     return { ...ranked, measured_on: 'likes + comments against each account\'s median (Meta doesn\'t share other accounts\' views). Over 3x is a signal; under 1.5x is a normal day.', could_not_read: r.problems.length ? r.problems : undefined };
   }
 });
