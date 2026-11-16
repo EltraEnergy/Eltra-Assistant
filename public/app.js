@@ -168,9 +168,22 @@
   function render() {
     var h = ''; taskCards = [];
     if (!chat.messages.length) h = '<div class="empty">Ask about your day, your email, a customer or a job</div>';
-    chat.messages.forEach(function (m) {
+    chat.messages.forEach(function (m, mi) {
       if (m.role === 'user') {
+        var lastTxt = Array.isArray(m.content) && m.content.length ? m.content[m.content.length - 1].text : null, th = (chat.thumbs && lastTxt && chat.thumbs[lastTxt]) || [], thi = 0;
         if (typeof m.content === 'string') { h += '<div class="m you">' + esc(m.content) + '</div>'; return; }
+        var shown = (m.content || []).filter(function (c) { return c.type === 'image' || c.type === 'document' || (c.type === 'text' && c.text); });
+        if (shown.length && !(m.content || []).some(function (c) { return c.type === 'tool_result'; })) {
+          var pics = '', words = '';
+          shown.forEach(function (c) {
+            if (c.type === 'image') { pics += '<img class="att" alt="Photo you sent" src="data:' + esc(c.source.media_type) + ';base64,' + c.source.data + '">'; thi++; }
+            else if (c.type === 'document') pics += '<span class="attdoc">PDF</span>';
+            else if (/^\[Attached photo/.test(c.text) && th[thi]) pics += '<img class="att" alt="Photo you sent" src="' + th[thi++] + '">';
+            else if (/^\[Attached /.test(c.text)) pics += '<span class="attdoc">' + esc(c.text.replace(/^\[Attached (\w+).*$/, '$1')) + '</span>';
+            else words += esc(c.text);
+          });
+          h += '<div class="m you">' + (pics ? '<div class="atts">' + pics + '</div>' : '') + words + '</div>'; return;
+        }
         (m.content || []).forEach(function (c) {
           if (c.type !== 'tool_result' || typeof c.content !== 'string' || c.content.indexOf('"browser_task"') < 0) return;
           var bt; try { bt = JSON.parse(c.content).browser_task; } catch (e) { return; }
@@ -237,17 +250,26 @@
   function ask(text) {
     wakeStop();
     var fw0 = findWake(text); if (SLEEP_RE.test((fw0 ? String(text).slice(fw0.end) : String(text)).trim())) { goSleep(); return; }
-    text = String(text || '').trim(); if (!text || busy) return;
+    text = String(text || '').trim(); if ((!text && !pendingAtt.length) || busy) return;
+    if (pendingAtt.some(function (p) { return p.loading; })) { $('vHint').textContent = 'Still preparing your photo, one moment…'; return; }
     unlockAudio(); hush();
     $('askIn').value = '';
     if (chat.approvals && chat.approvals.length) {
       // Spoken or typed approval: a short "approve", "yes, send it", "go ahead"… approves everything waiting;
       // "cancel", "no"… cancels it. Anything longer cancels and is treated as a new request, as before.
-      var said = voiceAnswer(text);
+      var said = pendingAtt.length ? null : voiceAnswer(text);
       if (said !== null) { decideAll(said); if (!said) speak('Cancelled.'); return; }
       var d = {}; chat.approvals.forEach(function (a) { d[a.id] = false; chat.results[a.id] = { title: a.title, ok: false }; }); chat.approvals = null; chat.pending = text; persist(); step(d); return;
     }
-    chat.messages.push({ role: 'user', content: text }); persist(); step({});
+    if (pendingAtt.length) {
+      var blocks = pendingAtt.map(function (p) { return p.block; });
+      blocks.push({ type: 'text', text: text || (pendingAtt.length > 1 ? 'Here are some files.' : 'Here’s a file.') });
+      var smalls = pendingAtt.map(function (p) { return p.small || ''; });
+      chat.messages.push({ role: 'user', content: blocks });
+      chat.thumbs = chat.thumbs || {}; chat.thumbs[blocks[blocks.length - 1].text] = smalls;
+      pendingAtt = []; renderAtt();
+    } else chat.messages.push({ role: 'user', content: text });
+    persist(); step({});
   }
   function step(decisions) {
     busy = true; aborted = false; lastError = null; setState('thinking', 'Thinking'); render();
@@ -257,7 +279,7 @@
       if (d.state === 'approval') { chat.approvals = d.approvals; busy = false; steps = 0; persist(); render(); openDrawer('chat'); setState('idle', 'Awaiting OK'); speak('Needs your OK: ' + d.approvals.map(function (a) { return a.title; }).join(', and ') + '. Say approve or cancel.', true); return; }
       if (d.acted && d.acted.length) setTimeout(loadToday, 1500);
       if (d.state === 'continue' && steps++ < 12) { persist(); render(); step({}); return; }
-      busy = false; steps = 0; persist();
+      busy = false; steps = 0; stripAttachments(); persist();
       if (chat.pending) { var t = chat.pending; chat.pending = null; ask(t); return; }
       render();
       var last = chat.messages[chat.messages.length - 1];
@@ -272,6 +294,7 @@
     });
   }
   $('askForm').addEventListener('submit', function (e) { e.preventDefault(); armed = false; ask($('askIn').value); });
+  $('askIn').addEventListener('focus', function () { if (!$('chatDrawer').hidden) return; });
   $('chips').addEventListener('click', function (e) { var b = e.target.closest('[data-say]'); if (b) ask(b.dataset.say); });
   $('stop').onclick = function () { aborted = true; busy = false; steps = 0; hush(); stopListening(true); setState('idle', 'Ready'); render(); };
   $('clear').onclick = function () { if (busy) return; chat = { messages: [], approvals: null, results: {}, decided: {} }; lastError = null; persist(); render(); hush(); };
@@ -625,6 +648,52 @@
   $('sleepBtn').onclick = goSleep;
   $('wakeBtn').onclick = function () { wakeUp('wake up'); };
   document.addEventListener('visibilitychange', function () { if (!document.hidden && asleep) keepAwake(); });
+
+  // ================= photos and PDFs in the chat =================
+  // Photos are shrunk on this device (long side 1600px) before sending. Once Eltra has answered, they're swapped for a short
+  // note in the saved chat so it stays small; she remembers what she saw from her own reply.
+  var pendingAtt = [];
+  function renderAtt() {
+    var box = $('attList'); box.textContent = ''; box.hidden = !pendingAtt.length;
+    pendingAtt.forEach(function (p, i) {
+      var d = document.createElement('span'); d.className = 'attchip';
+      d.innerHTML = (p.thumb ? '<img alt="" src="' + p.thumb + '">' : '<b>' + (p.loading ? '…' : 'PDF') + '</b>') + '<span>' + esc(p.name) + '</span><button type="button" aria-label="Remove ' + esc(p.name) + '">×</button>';
+      d.querySelector('button').onclick = function () { pendingAtt.splice(i, 1); renderAtt(); };
+      box.appendChild(d);
+    });
+  }
+  function addFiles(files) {
+    Array.prototype.slice.call(files || []).slice(0, 4 - pendingAtt.length).forEach(function (f) {
+      if (/^image\//.test(f.type)) {
+        var p = { name: f.name || 'photo', loading: true }; pendingAtt.push(p); renderAtt();
+        var url = URL.createObjectURL(f), img = new Image();
+        img.onload = function () {
+          var k = Math.min(1, 1600 / Math.max(img.width, img.height)), c = document.createElement('canvas');
+          c.width = Math.round(img.width * k); c.height = Math.round(img.height * k); c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+          var data = c.toDataURL('image/jpeg', 0.85); URL.revokeObjectURL(url);
+          var k2 = Math.min(1, 200 / Math.max(img.width, img.height)), t = document.createElement('canvas'); t.width = Math.round(img.width * k2); t.height = Math.round(img.height * k2); t.getContext('2d').drawImage(img, 0, 0, t.width, t.height); p.small = t.toDataURL('image/jpeg', 0.7);
+          p.loading = false; p.thumb = data; p.block = { type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: data.split(',')[1] } }; renderAtt();
+        };
+        img.onerror = function () { pendingAtt.splice(pendingAtt.indexOf(p), 1); renderAtt(); $('vHint').textContent = 'Couldn’t open that photo. Try a JPEG or PNG.'; };
+        img.src = url;
+      } else if (f.type === 'application/pdf') {
+        if (f.size > 3.5e6) { $('vHint').textContent = 'That PDF is over 3.5 MB. Save it to Drive and ask Eltra to read it from there.'; return; }
+        var q = { name: f.name || 'document.pdf', loading: true }; pendingAtt.push(q); renderAtt();
+        var r = new FileReader(); r.onload = function () { q.loading = false; q.block = { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: String(r.result).split(',')[1] } }; renderAtt(); }; r.readAsDataURL(f);
+      } else { $('vHint').textContent = 'Eltra can take photos (JPEG, PNG, HEIC from iPhone) and PDFs.'; }
+    });
+  }
+  function stripAttachments() {
+    chat.messages.forEach(function (m) {
+      if (m.role !== 'user' || !Array.isArray(m.content)) return;
+      m.content = m.content.map(function (c) { return c.type === 'image' ? { type: 'text', text: '[Attached photo, already viewed]' } : c.type === 'document' ? { type: 'text', text: '[Attached PDF, already read]' } : c; });
+    });
+  }
+  $('attBtn').onclick = function () { $('attFile').click(); };
+  $('attFile').onchange = function () { addFiles(this.files); this.value = ''; };
+  $('askIn').addEventListener('paste', function (e) { var fs = e.clipboardData && e.clipboardData.files; if (fs && fs.length) { e.preventDefault(); addFiles(fs); } });
+  $('chatDrawer').addEventListener('dragover', function (e) { e.preventDefault(); });
+  $('chatDrawer').addEventListener('drop', function (e) { e.preventDefault(); addFiles(e.dataTransfer.files); });
 
   // ================= drawers: chat and settings stay out of the way until needed =================
   function openDrawer(which) {

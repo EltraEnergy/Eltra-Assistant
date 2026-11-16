@@ -10,9 +10,10 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="Eltra Today">
 <meta name="robots" content="noindex, nofollow">
-<link rel="manifest" href="manifest.webmanifest">
-<link rel="apple-touch-icon" href="apple-touch-icon.png">
-<link rel="icon" type="image/png" href="icon-192.png">
+<link rel="manifest" href="manifest.webmanifest?v=3">
+<link rel="apple-touch-icon" href="apple-touch-icon.png?v=3">
+<link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon.png?v=3">
+<link rel="icon" type="image/png" href="icon-192.png?v=3">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Barlow:wght@400;500;600;700&family=Barlow+Semi+Condensed:wght@500;600;700&display=swap" rel="stylesheet">
@@ -290,6 +291,17 @@
     .hright .clock { display: none; }
   }
 
+  /* photos in chat */
+  .attbtn { width: 44px; height: 44px; flex: none; display: grid; place-items: center; border: 1px solid var(--line); border-radius: 10px; background: #fff; color: var(--muted); cursor: pointer; }
+  .attbtn:hover { color: var(--blue); border-color: var(--blue-line); }
+  .attlist { display: flex; flex-wrap: wrap; gap: 8px; padding: 10px 18px 0; }
+  .attchip { display: inline-flex; align-items: center; gap: 8px; max-width: 220px; background: var(--paper); border-radius: 10px; padding: 4px 4px 4px 4px; font-size: 13.5px; }
+  .attchip img, .attchip b { width: 36px; height: 36px; border-radius: 6px; object-fit: cover; display: grid; place-items: center; background: var(--blue-soft); color: var(--blue); font-size: 11px; }
+  .attchip span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .attchip button { width: 28px; height: 28px; border: 0; background: transparent; color: var(--muted); font-size: 18px; cursor: pointer; border-radius: 6px; }
+  .m.you .atts { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 6px; }
+  .m.you img.att { max-width: 180px; max-height: 180px; border-radius: 8px; display: block; }
+  .m.you .attdoc { display: inline-block; font-size: 12.5px; font-weight: 600; background: rgba(255,255,255,.2); border-radius: 6px; padding: 2px 8px; }
   /* browser task card */
   .card.task { border-color: var(--blue-line); background: #F5F9FF; }
   .card.task .ch { color: var(--blue); }
@@ -428,7 +440,8 @@
         <button type="button" data-say="Which leads need following up?">Leads to chase</button>
         <button type="button" data-say="What jobs are booked this week?">Jobs this week</button>
       </div>
-  <form class="ask" id="askForm"><input id="askIn" type="text" autocomplete="off" placeholder="Ask Eltra anything…" aria-label="Message"><button type="submit" class="btn" id="sendBtn">Send</button></form>
+  <div class="attlist" id="attList" hidden></div>
+  <form class="ask" id="askForm"><button type="button" class="attbtn" id="attBtn" aria-label="Attach a photo or PDF" title="Attach a photo or PDF"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21.4 11.1l-9.2 9.2a6 6 0 0 1-8.5-8.5l9.2-9.2a4 4 0 0 1 5.7 5.7l-9.2 9.2a2 2 0 0 1-2.8-2.8l8.5-8.5"/></svg></button><input type="file" id="attFile" accept="image/*,application/pdf" multiple hidden><input id="askIn" type="text" autocomplete="off" placeholder="Ask Eltra anything…" aria-label="Message"><button type="submit" class="btn" id="sendBtn">Send</button></form>
 </aside>
 <aside class="drawer" id="setDrawer" aria-label="Settings" hidden>
   <div class="dhead"><h2>Settings</h2><button type="button" class="xbtn" data-close aria-label="Close settings">×</button></div>
