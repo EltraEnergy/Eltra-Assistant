@@ -18,10 +18,14 @@ function signedTasks(name, design) {
   return [
     { section: 'Admin', text: 'Send ' + name + ' the welcome / next steps email', due: dayPlus(0), owner: 'will' },
     { section: 'Install dates', text: 'Book the install date with ' + name, due: dayPlus(1), owner: 'ethan' },
-    { section: 'DNSP', text: 'Lodge the DNSP pre-approval for ' + name, due: dayPlus(1), owner: 'will' },
-    { section: 'Order stock', text: 'Order stock for ' + name + (kit ? ': ' + kit : ''), due: dayPlus(2), owner: 'ethan' }
-  ];
+    { section: 'DNSP', text: 'Lodge the DNSP pre-approval for ' + name, due: dayPlus(1), owner: 'will' }
+  ];   // ordering stock comes a week before the install date (see the install check)
 }
+const kitOf = (design) => design ? [design.panels.join('; '), design.inverters.join('; '), design.batteries.join('; ')].filter(Boolean).join(' · ') : '';
+const norm = (t) => String(t || '').toLowerCase().replace(/[^a-z0-9 ]/g, ' ').replace(/\s+/g, ' ').trim();
+const custOf = (summary) => String(summary || '').replace(/^\s*install(ation)?\s*[-–:]?\s*/i, '').trim() || 'the install';
+// the signed job whose customer name matches the calendar event (to list the right kit)
+function kitFor(s, who) { const w = norm(who); if (!w) return ''; const k = Object.keys(s.kits || {}).find((n) => n && (w.includes(n) || n.includes(w))); return k ? s.kits[k] : ''; }
 
 // ---- Proposal follow-up sequence ----
 // Three touches per unsigned proposal, counted from when its design was made in Pylon: day 3, day 7, day 14.
@@ -80,7 +84,7 @@ export const runAutomations = (opts = {}) => runAs('will', () => automationsAsWi
 async function automationsAsWill({ force = false } = {}) {
   const s = (await store().get(STATE, { type: 'json' })) || {};
   if (!force && s.lastRun && Date.now() - Date.parse(s.lastRun) < 15 * 60000) return { skipped: 'ran recently' };
-  s.signed = s.signed || []; s.followed = s.followed || []; s.signedLog = s.signedLog || []; s.commissioned = s.commissioned || [];
+  s.signed = s.signed || []; s.followed = s.followed || []; s.signedLog = s.signedLog || []; s.commissioned = s.commissioned || []; s.kits = s.kits || {};
   const first = !s.lastRun, added = [], started = Date.now();
   const google = await googleStatus().catch(() => ({ connected: false }));   // Will's Google (background jobs run as Will)
 
@@ -105,6 +109,7 @@ async function automationsAsWill({ force = false } = {}) {
         const designs = (ds.data || []).map(pylonDesign);
         const design = designs.find((x) => x.id === p.signed_design_id) || designs.find((x) => x.primary) || designs[0];
         for (const t of signedTasks(name, design)) added.push(await addTodo({ ...t, ref: name + ' · auto' }));
+        s.kits = s.kits || {}; s.kits[norm(name)] = kitOf(design);
       }
       if (p.sold || !attrs.is_committed || !p.primary_design_id) continue;
       p.createdAt = attrs.created_at;
@@ -112,27 +117,52 @@ async function automationsAsWill({ force = false } = {}) {
     }
   }
 
-  // The day after an install in the calendar (an event with "install" in its title), remind Will to lodge the commissioning notice.
+  // Install bookings in Will's calendar (events with "install" in the title) drive three reminders:
+  //   a week before  → Ethan: order the stock (with the kit from the signed design)
+  //   install day    → Will: create the CES and send it to the inspector
+  //   2 weeks after  → Will: lodge the DNSP commissioning notice (once the inspector has inspected)
   if (google.connected && (!s.calCheckedAt || Date.now() - Date.parse(s.calCheckedAt) > 2 * 3600e3)) {
     s.calCheckedAt = new Date().toISOString();
+    s.installs = s.installs || {};
+    (s.commissioned || []).forEach((id) => { if (!s.installs[id]) s.installs[id] = { stock: true, ces: true, comm: true }; });   // done under the old rules
+    s.commissioned = [];
     try {
-      const q = new URLSearchParams({ q: 'install', singleEvents: 'true', orderBy: 'startTime', timeMin: new Date(Date.now() - 4 * 864e5).toISOString(), timeMax: new Date().toISOString(), maxResults: '20' });
+      const q = new URLSearchParams({ q: 'install', singleEvents: 'true', orderBy: 'startTime', timeMin: new Date(Date.now() - 20 * 864e5).toISOString(), timeMax: new Date(Date.now() + 9 * 864e5).toISOString(), maxResults: '50' });
       const ev = await g(CAL + '/events?' + q);
-      const today = melbToday(0);
+      const today = melbToday(0), inDays = (n) => melbToday(n);
+      const toDay = (x) => x && (x.date || (x.dateTime && new Date(x.dateTime).toLocaleDateString('en-CA', { timeZone: 'Australia/Melbourne' }))) || '';
       for (const e of ev.items || []) {
-        const end = (e.end && (e.end.date || (e.end.dateTime && new Date(e.end.dateTime).toLocaleDateString('en-CA', { timeZone: 'Australia/Melbourne' })))) || '';
-        if (!/install/i.test(e.summary || '') || e.status === 'cancelled' || !end || end >= today || s.commissioned.includes(e.id)) continue;
-        s.commissioned.push(e.id);
-        if (first) continue;
-        added.push(await addTodo({ owner: 'will', section: 'DNSP', text: 'Lodge the commissioning notice for ' + (e.summary || 'the install').replace(/^\s*install(ation)?\s*[-–:]?\s*/i, '') + ' (installed ' + end + ')', due: today, ref: 'auto' }));
+        if (!/install/i.test(e.summary || '') || e.status === 'cancelled') continue;
+        const day = toDay(e.start); if (!day) continue;
+        const who = custOf(e.summary), rec = s.installs[e.id] || {};
+        // the first check under these rules: jobs already booked got their stock reminder at signing, and old installs are done
+        if (first || !s.installsInit) { if (!s.installs[e.id]) s.installs[e.id] = { stock: true, ces: day < inDays(-1), comm: day <= inDays(-14), day }; continue; }
+        rec.day = day;
+        if (!rec.stock && day <= inDays(7) && day > today) {
+          const kit = kitFor(s, who), due = new Date(Date.parse(day + 'T12:00:00Z') - 7 * 864e5).toISOString().slice(0, 10);
+          added.push(await addTodo({ owner: 'ethan', section: 'Order stock', text: 'Order stock for ' + who + ' (install ' + day + ')' + (kit ? ': ' + kit : ''), due: due < today ? today : due, ref: who + ' · auto' }));
+          rec.stock = true;
+        }
+        if (!rec.ces && day <= today) {
+          added.push(await addTodo({ owner: 'will', section: 'DNSP', text: 'Create the CES for ' + who + ' and send it to the inspector', due: day < inDays(-1) ? today : day, ref: who + ' · auto' }));
+          rec.ces = true;
+        }
+        if (!rec.comm && day <= inDays(-14)) {
+          added.push(await addTodo({ owner: 'will', section: 'DNSP', text: 'Lodge the DNSP commissioning notice for ' + who + ' (installed ' + day + ', inspection should be done)', due: today, ref: who + ' · auto' }));
+          rec.comm = true;
+        }
+        s.installs[e.id] = rec;
       }
+      s.installsInit = true;
     } catch {}
   }
 
   // Monday morning summary email (once a week)
   try { await sendWeeklySummaries(s); } catch {}
 
-  s.signed = s.signed.slice(-500); s.commissioned = s.commissioned.slice(-300);
+  s.signed = s.signed.slice(-500);
+  if (s.installs) for (const k of Object.keys(s.installs)) if (s.installs[k].day && s.installs[k].day < melbToday(-40)) delete s.installs[k];
+  if (s.kits && Object.keys(s.kits).length > 200) s.kits = Object.fromEntries(Object.entries(s.kits).slice(-200));
   if (s.follow) for (const k of Object.keys(s.follow)) if (s.follow[k].stopped || s.follow[k].stage >= 3) { if (Date.now() - Date.parse(s.follow[k].lastAt || 0) > 90 * 864e5) { delete s.follow[k]; if (s.designAt) delete s.designAt[k]; } }
   s.signedLog = s.signedLog.filter((x) => Date.now() - Date.parse(x.at) < 30 * 864e5);
   s.lastRun = new Date().toISOString();
