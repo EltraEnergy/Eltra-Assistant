@@ -74,7 +74,7 @@
     if (nx.location) b.push('<a href="' + mapsLink(nx.location) + '" target="_blank" rel="noopener">' + esc(shortAddr(nx.location)) + '</a>');
     if (nx.who && nx.who.phone) b.push('<span>' + phone(nx.who.phone) + '</span>');
     if (nx.who && nx.who.name && nx.title !== nx.who.name) b.push('<span class="sub">' + esc(nx.title) + '</span>');
-    b.push('<button type="button" class="prep" id="prepVisit">Prep this visit</button>');
+    if (nx.sale) b.push('<button type="button" class="prep" id="prepVisit">Prep this visit</button>');
     $('nextMeta').innerHTML = b.join('');
     nextEv = nx;
   }
@@ -107,7 +107,7 @@
         var d = [];
         if (e.location) d.push('<a href="' + mapsLink(e.location) + '" target="_blank" rel="noopener">' + esc(shortAddr(e.location)) + '</a>');
         if (e.who && e.who.phone) d.push('<span>' + phone(e.who.phone) + '</span>');
-        h += '<div class="ev' + (past ? ' past' : '') + (live ? ' now' : e.sale ? ' sale' : '') + '"><time>' + (e.allDay ? 'All day' : esc(fmt(e.start, { hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }))) + (!e.allDay && e.end ? '<small>' + Math.round((e.end - e.start) / 60000) + ' min</small>' : '') + '</time><div><div class="t"><a href="' + esc(e.link) + '" target="_blank" rel="noopener">' + esc(e.title) + '</a>' + (e.sale ? '<span class="tag sale">Sales</span>' : '') + '</div>' + (d.length ? '<div class="d">' + d.join('') + '</div>' : '') + '</div></div>';
+        h += '<div class="ev' + (past ? ' past' : '') + (live ? ' now' : e.sale ? ' sale' : '') + '"><time>' + (e.allDay ? 'All day' : esc(fmt(e.start, { hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }))) + (!e.allDay && e.end ? '<small>' + Math.round((e.end - e.start) / 60000) + ' min</small>' : '') + '</time><div><div class="t"><a href="' + esc(e.link) + '" target="_blank" rel="noopener">' + esc(e.title) + '</a>' + (e.sale ? '<span class="tag sale">Sales</span>' : '') + (e.sale && !past ? '<button type="button" class="evprep" data-prepev="' + events.indexOf(e) + '">Prep</button>' : '') + '</div>' + (d.length ? '<div class="d">' + d.join('') + '</div>' : '') + '</div></div>';
       });
       return h + '</div>';
     });
@@ -833,11 +833,12 @@
   };
 
   // ================= visit prep and log-out setting =================
-  $('nextMeta').addEventListener('click', function (e) {
-    if (!e.target.closest('#prepVisit') || !nextEv) return;
-    var when = fmt(nextEv.start, { weekday: 'long', hour: 'numeric', minute: '2-digit' });
-    ask('Prep me for my visit: "' + nextEv.title + '" on ' + when + (nextEv.location ? ' at ' + nextEv.location : '') + (nextEv.who && nextEv.who.name ? ' with ' + nextEv.who.name : '') + '. Find the customer in Pylon and GoHighLevel, their bill and any recent emails, and give me a one-screen brief: who they are, what they want or were quoted, their usage and bill, anything to watch for, and what to bring.');
-  });
+  function prepVisit(ev) {
+    var when = fmt(ev.start, { weekday: 'long', day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' });
+    ask('Prep me for my visit: "' + ev.title + '" on ' + when + (ev.location ? ' at ' + ev.location : '') + (ev.who && ev.who.name ? ' with ' + ev.who.name : '') + '. Find the customer in Pylon and GoHighLevel, their bill and any recent emails, and give me a one-screen brief: who they are, what they want or were quoted, their usage and bill, anything to watch for, and what to bring.');
+  }
+  $('nextMeta').addEventListener('click', function (e) { if (e.target.closest('#prepVisit') && nextEv) prepVisit(nextEv); });
+  $('cal').addEventListener('click', function (e) { var b = e.target.closest('[data-prepev]'); if (!b) return; var ev = events[+b.dataset.prepev]; if (ev) prepVisit(ev); });
   try { $('clearOnOut').checked = localStorage.getItem('eltra-keep-chat') !== '1'; } catch (e) {}
   $('clearOnOut').onchange = function () { try { localStorage.setItem('eltra-keep-chat', $('clearOnOut').checked ? '0' : '1'); } catch (e) {} };
 

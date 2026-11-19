@@ -145,7 +145,8 @@ export function eventOut(e) {
     start_iso: allDay ? e.start.date : e.start && e.start.dateTime, end_iso: e.end && (e.end.dateTime || e.end.date),
     start: e.start && (e.start.dateTime ? melbDate(e.start.dateTime) : e.start.date + ' (all day)'),
     location: e.location || (who && who.address) || null, customer: who,
-    sales_visit: /appointment details|assessment|site visit|consult/i.test((e.summary || '') + ' ' + (e.description || '')),
+    // a sales appointment, never an install or other job booking
+    sales_visit: /appointment details|assessment|site visit|consult|quote|sales/i.test((e.summary || '') + ' ' + (e.description || '')) && !/install|commission|inspection|service call|maintenance/i.test(e.summary || ''),
     description: who ? null : clip(strip(e.description || ''), 300) || null, link: e.htmlLink
   };
 }
