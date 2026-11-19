@@ -8,6 +8,7 @@ import { pylon, pylonReady, pylonProject, pylonDesign, DESIGN_FIELDS, toolByName
 import { googleStatus, g, CAL } from './google.mjs';
 import { claudeJSON } from './claude.mjs';
 import { sendWeeklySummaries } from './weekly.mjs';
+import { loadJobs, saveJobs, upsertJob, setInstall } from './jobs.mjs';
 
 const STATE = 'automations';
 const dayPlus = (n) => { const d = new Date(Date.now() + n * 864e5); return d.toLocaleDateString('en-CA', { timeZone: 'Australia/Melbourne' }); };
@@ -87,6 +88,7 @@ async function automationsAsWill({ force = false } = {}) {
   s.signed = s.signed || []; s.followed = s.followed || []; s.signedLog = s.signedLog || []; s.commissioned = s.commissioned || []; s.kits = s.kits || {};
   const first = !s.lastRun, added = [], started = Date.now();
   const google = await googleStatus().catch(() => ({ connected: false }));   // Will's Google (background jobs run as Will)
+  const jobs = await loadJobs();
 
   if (pylonReady()) {
     // newest projects (last ~60): enough for a small team
@@ -109,7 +111,7 @@ async function automationsAsWill({ force = false } = {}) {
         const designs = (ds.data || []).map(pylonDesign);
         const design = designs.find((x) => x.id === p.signed_design_id) || designs.find((x) => x.primary) || designs[0];
         for (const t of signedTasks(name, design)) added.push(await addTodo({ ...t, ref: name + ' · auto' }));
-        s.kits = s.kits || {}; s.kits[norm(name)] = kitOf(design);
+        upsertJob(jobs, { name, projectId: p.id, kit: kitOf(design) });
       }
       if (p.sold || !attrs.is_committed || !p.primary_design_id) continue;
       p.createdAt = attrs.created_at;
@@ -117,52 +119,61 @@ async function automationsAsWill({ force = false } = {}) {
     }
   }
 
-  // Install bookings in Will's calendar (events with "install" in the title) drive three reminders:
-  //   a week before  → Ethan: order the stock (with the kit from the signed design)
-  //   install day    → Will: create the CES and send it to the inspector
-  //   2 weeks after  → Will: lodge the DNSP commissioning notice (once the inspector has inspected)
-  if (google.connected && (!s.calCheckedAt || Date.now() - Date.parse(s.calCheckedAt) > 2 * 3600e3)) {
+  // 1. Calendars as a backup source of install dates: "Install – name" events in Will's or Ethan's calendar.
+  if (!s.calCheckedAt || Date.now() - Date.parse(s.calCheckedAt) > 2 * 3600e3) {
     s.calCheckedAt = new Date().toISOString();
-    s.installs = s.installs || {};
-    (s.commissioned || []).forEach((id) => { if (!s.installs[id]) s.installs[id] = { stock: true, ces: true, comm: true }; });   // done under the old rules
-    s.commissioned = [];
-    try {
-      const q = new URLSearchParams({ q: 'install', singleEvents: 'true', orderBy: 'startTime', timeMin: new Date(Date.now() - 20 * 864e5).toISOString(), timeMax: new Date(Date.now() + 9 * 864e5).toISOString(), maxResults: '50' });
-      const ev = await g(CAL + '/events?' + q);
-      const today = melbToday(0), inDays = (n) => melbToday(n);
-      const toDay = (x) => x && (x.date || (x.dateTime && new Date(x.dateTime).toLocaleDateString('en-CA', { timeZone: 'Australia/Melbourne' }))) || '';
-      for (const e of ev.items || []) {
-        if (!/install/i.test(e.summary || '') || e.status === 'cancelled') continue;
-        const day = toDay(e.start); if (!day) continue;
-        const who = custOf(e.summary), rec = s.installs[e.id] || {};
-        // the first check under these rules: jobs already booked got their stock reminder at signing, and old installs are done
-        if (first || !s.installsInit) { if (!s.installs[e.id]) s.installs[e.id] = { stock: true, ces: day < inDays(-1), comm: day <= inDays(-14), day }; continue; }
-        rec.day = day;
-        if (!rec.stock && day <= inDays(7) && day > today) {
-          const kit = kitFor(s, who), due = new Date(Date.parse(day + 'T12:00:00Z') - 7 * 864e5).toISOString().slice(0, 10);
-          added.push(await addTodo({ owner: 'ethan', section: 'Order stock', text: 'Order stock for ' + who + ' (install ' + day + ')' + (kit ? ': ' + kit : ''), due: due < today ? today : due, ref: who + ' · auto' }));
-          rec.stock = true;
+    for (const who of ['will', 'ethan']) {
+      await runAs(who, async () => {
+        const gs = await googleStatus().catch(() => ({}));
+        if (!gs.connected) return;
+        const q = new URLSearchParams({ q: 'install', singleEvents: 'true', orderBy: 'startTime', timeMin: new Date(Date.now() - 20 * 864e5).toISOString(), timeMax: new Date(Date.now() + 120 * 864e5).toISOString(), maxResults: '100' });
+        const ev = await g(CAL + '/events?' + q).catch(() => ({ items: [] }));
+        const toDay = (x) => x && (x.date || (x.dateTime && new Date(x.dateTime).toLocaleDateString('en-CA', { timeZone: 'Australia/Melbourne' }))) || '';
+        for (const e of ev.items || []) {
+          if (!/install/i.test(e.summary || '') || e.status === 'cancelled') continue;
+          const day = toDay(e.start); if (day) setInstall(jobs, custOf(e.summary), day, 'calendar');
         }
-        if (!rec.ces && day <= today) {
-          added.push(await addTodo({ owner: 'will', section: 'DNSP', text: 'Create the CES for ' + who + ' and send it to the inspector', due: day < inDays(-1) ? today : day, ref: who + ' · auto' }));
-          rec.ces = true;
-        }
-        if (!rec.comm && day <= inDays(-14)) {
-          added.push(await addTodo({ owner: 'will', section: 'DNSP', text: 'Lodge the DNSP commissioning notice for ' + who + ' (installed ' + day + ', inspection should be done)', due: today, ref: who + ' · auto' }));
-          rec.comm = true;
-        }
-        s.installs[e.id] = rec;
+      }).catch(() => {});
+    }
+  }
+
+  // 2. Reminders from each job's install date:
+  //    a week before → Ethan orders the stock (with the kit) · install day → Will creates the CES and sends it to the
+  //    inspector · 2 weeks after → Will lodges the DNSP commissioning notice (once the inspector has been).
+  {
+    const today = melbToday(0), inDays = (n) => melbToday(n);
+    // switching over from the calendar-only version: jobs already under way don't get repeat reminders
+    if (!s.jobsInit) {
+      for (const jb of jobs.list) if (jb.installDate) jb.flags = { stock: true, ces: jb.installDate < inDays(-1), comm: jb.installDate <= inDays(-14), ...(jb.flags || {}) };
+      s.jobsInit = true;
+    }
+    for (const jb of jobs.list) {
+      const day = jb.installDate; if (!day || jb.closed) continue;
+      jb.flags = jb.flags || {};
+      if (first) { jb.flags = { stock: true, ces: day < inDays(-1), comm: day <= inDays(-14) }; continue; }
+      if (!jb.flags.stock && day > today && day <= inDays(7)) {
+        const due = new Date(Date.parse(day + 'T12:00:00Z') - 7 * 864e5).toISOString().slice(0, 10);
+        added.push(await addTodo({ owner: 'ethan', section: 'Order stock', text: 'Order stock for ' + jb.name + ' (install ' + day + ')' + (jb.kit ? ': ' + jb.kit : ''), due: due < today ? today : due, ref: jb.name + ' · auto' }));
+        jb.flags.stock = true;
       }
-      s.installsInit = true;
-    } catch {}
+      if (!jb.flags.ces && day <= today && day >= inDays(-3)) {
+        added.push(await addTodo({ owner: 'will', section: 'DNSP', text: 'Create the CES for ' + jb.name + ' and send it to the inspector', due: today, ref: jb.name + ' · auto' }));
+        jb.flags.ces = true;
+      }
+      if (!jb.flags.comm && day <= inDays(-14)) {
+        added.push(await addTodo({ owner: 'will', section: 'DNSP', text: 'Lodge the DNSP commissioning notice for ' + jb.name + ' (installed ' + day + ', inspection should be done)', due: today, ref: jb.name + ' · auto' }));
+        jb.flags.comm = true;
+      }
+      if (jb.flags.comm && day < inDays(-60)) jb.closed = true;
+    }
+    await saveJobs(jobs);
   }
 
   // Monday morning summary email (once a week)
   try { await sendWeeklySummaries(s); } catch {}
 
   s.signed = s.signed.slice(-500);
-  if (s.installs) for (const k of Object.keys(s.installs)) if (s.installs[k].day && s.installs[k].day < melbToday(-40)) delete s.installs[k];
-  if (s.kits && Object.keys(s.kits).length > 200) s.kits = Object.fromEntries(Object.entries(s.kits).slice(-200));
+  delete s.installs; delete s.kits;
   if (s.follow) for (const k of Object.keys(s.follow)) if (s.follow[k].stopped || s.follow[k].stage >= 3) { if (Date.now() - Date.parse(s.follow[k].lastAt || 0) > 90 * 864e5) { delete s.follow[k]; if (s.designAt) delete s.designAt[k]; } }
   s.signedLog = s.signedLog.filter((x) => Date.now() - Date.parse(x.at) < 30 * 864e5);
   s.lastRun = new Date().toISOString();

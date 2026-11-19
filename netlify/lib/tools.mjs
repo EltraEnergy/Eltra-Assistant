@@ -5,6 +5,7 @@ import { currentUser } from './util.mjs';
 import { loadPrefs, portalFor } from './prefs.mjs';
 import { loadContent, updateItem } from './content.mjs';
 import { addProposal } from './improve.mjs';
+import { loadJobs, saveJobs, setInstall, parseDay } from './jobs.mjs';
 import { SKILLS, HOOKS, VOICE_TEMPLATE, RUBRIC } from './instagram-data.mjs';
 import { humanize, detect } from './instagram.mjs';
 import { rankHooks, beatSheet, swipeFile, captionLint } from './instagram-tools.mjs';
@@ -854,6 +855,25 @@ tool({
   description: 'Propose an improvement to yourself (Eltra) for Will or Ethan to approve on the dashboard. Use it when you were asked for something you can\'t do, when a tool keeps failing, or when you notice a better way of working. kind "behaviour": a change to how you work, written as one clear instruction to yourself in change; it goes live when approved. kind "feature": needs new code or a new connection; put a short build brief in change. Don\'t propose things already possible.',
   input_schema: { type: 'object', properties: { kind: { type: 'string', enum: ['behaviour', 'feature'] }, title: { type: 'string' }, why: { type: 'string' }, change: { type: 'string' } }, required: ['kind', 'title', 'why', 'change'] },
   async run(i) { const it = await addProposal(i, 'chat'); return { proposed: { id: it.id, title: it.title, kind: it.kind }, note: 'It\'s waiting for approval in the Improvements panel on the dashboard.' }; }
+});
+
+
+// ---------- Signed jobs and install dates ----------
+tool({
+  name: 'jobs_list', group: 'core',
+  description: 'Signed jobs Eltra is tracking: customer, kit, install date (and where it came from), and which after-sale reminders have gone out (stock a week before, CES on the day, DNSP commissioning 2 weeks after).',
+  input_schema: { type: 'object', properties: {} },
+  async run() { const d = await loadJobs(); return { jobs: d.list.filter((x) => !x.closed).map((x) => ({ customer: x.name, install_date: x.installDate || 'not set', set_by: x.installSource, kit: x.kit, reminders_sent: x.flags })) }; }
+});
+tool({
+  name: 'job_install_date', group: 'core',
+  description: 'Record or move a job\'s install date. Use it whenever Will or Ethan says when an install is, books one, or moves one ("Sarah\'s install is Tuesday", "move Mark to the 3rd"). The stock order (a week before), CES (on the day) and DNSP commissioning (2 weeks after) reminders run from this date. date: YYYY-MM-DD.',
+  input_schema: { type: 'object', properties: { customer: { type: 'string' }, date: { type: 'string' } }, required: ['customer', 'date'] },
+  async run({ customer, date }) {
+    const day = parseDay(date); if (!day) throw new Error('Give the date as YYYY-MM-DD');
+    const d = await loadJobs(), j = setInstall(d, customer, day, 'eltra'); await saveJobs(d);
+    return { saved: { customer: j.name, install_date: j.installDate, previous: j.previousDate }, note: j.unsigned ? 'No signed job by that name yet; the date is saved and the reminders will still run.' : undefined };
+  }
 });
 
 // Tools available right now (only the systems that are set up)
