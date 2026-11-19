@@ -4,7 +4,7 @@ import { loadTodos, addTodo, updateTodo } from './todos.mjs';
 import { currentUser } from './util.mjs';
 import { loadPrefs, portalFor } from './prefs.mjs';
 import { loadContent, updateItem } from './content.mjs';
-import { addProposal } from './improve.mjs';
+import { addProposal, decide, loadImprove } from './improve.mjs';
 import { loadJobs, saveJobs, setInstall, parseDay } from './jobs.mjs';
 import { SKILLS, HOOKS, VOICE_TEMPLATE, RUBRIC } from './instagram-data.mjs';
 import { humanize, detect } from './instagram.mjs';
@@ -195,7 +195,9 @@ async function gmailSignature() {
   } catch (e) { return { html: '', text: '' }; }
 }
 tool({
-  name: 'gmail_create_draft', group: 'google',
+  name: 'gmail_create_draft', group: 'google', action: true,
+  // shown in full for approval first; it only goes into Gmail once approved
+  async describe(i) { return { title: 'Put this email in Gmail as a draft' + (i.reply_to_message_id ? ' (reply)' : ''), lines: ['To: ' + (i.to || '(same thread)') + (i.cc ? '  ·  Cc: ' + i.cc : ''), 'Subject: ' + (i.subject || '(same as the thread)')], preview: i.body || '' }; },
   description: 'Create an email DRAFT in Will’s Gmail (nothing is sent). To reply in an existing conversation, pass reply_to_message_id and the draft goes into that thread. Write in Will’s voice: friendly, plain Australian English, short. End the body with a short sign-off such as "Cheers," or "Thanks," and nothing after it: Will’s Gmail signature (name, details and logo) is added automatically underneath.',
   input_schema: { type: 'object', properties: { to: { type: 'string', description: 'Comma-separated addresses' }, cc: { type: 'string' }, subject: { type: 'string' }, body: { type: 'string', description: 'Plain text' }, reply_to_message_id: { type: 'string' } }, required: ['to', 'body'] },
   async run({ to, cc, subject, body, reply_to_message_id }) {
@@ -875,6 +877,33 @@ tool({
     const d = await loadJobs(), j = setInstall(d, customer, day, 'eltra'); await saveJobs(d);
     return { saved: { customer: j.name, install_date: j.installDate, previous: j.previousDate }, note: j.unsigned ? 'No signed job by that name yet; the date is saved and the reminders will still run.' : undefined };
   }
+});
+
+
+// ---------- Learning how to work (rules Will or Ethan teach her) ----------
+tool({
+  name: 'learn_rule', group: 'core', action: true,
+  description: 'Learn a lasting rule about how to work, whenever Will or Ethan corrects you or says how things should be done from now on ("don\'t create the draft in Gmail, show me here first", "always copy Ethan on supplier emails", "never book installs on Fridays", "remember our deposit is 20%"). Write the rule as one clear instruction to yourself. They approve it in the chat, then you follow it in every future conversation. If it needs a new ability or connection rather than a change in how you work, use suggest_improvement with kind "feature" instead.',
+  input_schema: { type: 'object', properties: { rule: { type: 'string', description: 'one clear instruction to yourself' }, why: { type: 'string', description: 'what they said, in a few words' } }, required: ['rule'] },
+  async describe(i) { return { title: 'Teach Eltra this for good', lines: [i.rule].concat(i.why ? ['Because: ' + i.why] : []) }; },
+  async run({ rule, why }) {
+    const it = await addProposal({ kind: 'behaviour', title: String(rule).slice(0, 110), why: why || 'Taught in chat', change: rule }, 'taught in chat');
+    await decide(it.id, 'approve');
+    return { learned: rule, note: 'Saved for good. It applies from your next message, in every chat, for Will and Ethan.' };
+  }
+});
+tool({
+  name: 'learned_rules', group: 'core',
+  description: 'The rules Eltra has been taught or has approved for how she works, with ids, so one can be changed or removed when asked ("stop doing that", "forget that rule").',
+  input_schema: { type: 'object', properties: {} },
+  async run() { const d = await loadImprove(); return { rules: d.items.filter((x) => x.kind === 'behaviour' && x.status === 'live').map((x) => ({ id: x.id, rule: x.change })) }; }
+});
+tool({
+  name: 'unlearn_rule', group: 'core', action: true,
+  description: 'Stop following a learned rule (by id from learned_rules), when Will or Ethan asks.',
+  input_schema: { type: 'object', properties: { id: { type: 'string' }, rule: { type: 'string', description: 'the rule text, for the approval card' } }, required: ['id'] },
+  async describe(i) { return { title: 'Stop following this rule', lines: [i.rule || i.id] }; },
+  async run({ id }) { await decide(id, 'reject'); return { removed: true }; }
 });
 
 // Tools available right now (only the systems that are set up)
