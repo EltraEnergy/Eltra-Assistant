@@ -42,9 +42,10 @@ function pickSection(d, name, create) {
   return d.sections[0];
 }
 
-export async function addTodo({ section, text, due, ref, owner }) {
+export async function addTodo({ section, text, due, ref, owner, meta }) {
   const d = await loadTodos();
   const item = { id: crypto.randomUUID().slice(0, 8), section: pickSection(d, section, true), text: str(text, 300), due: /^\d{4}-\d{2}-\d{2}$/.test(due || '') ? due : '', ref: str(ref, 200), owner: ownerOf(owner), by: currentUser(), done: false, createdAt: new Date().toISOString() };
+  if (meta && typeof meta === 'object') item.meta = JSON.parse(JSON.stringify(meta, (k, v) => (typeof v === 'string' ? v.slice(0, 300) : v)));
   if (!item.text) throw new Error('A to-do needs some text');
   d.items.push(item); await save(d); return item;
 }

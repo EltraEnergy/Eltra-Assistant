@@ -989,7 +989,7 @@
       var due = todoDueText(it.due);
       li.innerHTML = '<input type="checkbox"' + (it.done ? ' checked' : '') + ' aria-label="Done: ' + esc(it.text) + '">' +
         '<span class="tt">' + esc(it.text) + '<small>' + [todoTab === 'All' ? it.section : '', it.ref, (it.owner && it.owner !== me.user) ? 'for ' + OWNER[it.owner] : ''].filter(Boolean).map(esc).join(' · ') + '</small></span>' +
-        '<span class="due ' + (due && !it.done ? due.cls : '') + '">' + (due ? esc(due.txt) : '') + '</span>' +
+        '<span class="due ' + (due && !it.done ? due.cls : '') + '">' + (it.meta && it.meta.kind === 'followup' && !it.done ? '<button type="button" class="tdraft" data-draft>Draft email</button> ' : '') + (due ? esc(due.txt) : '') + '</span>' +
         '<button type="button" class="x" aria-label="Delete: ' + esc(it.text) + '">×</button>';
       li.querySelector('input').onchange = function (ev) {
         var cb = ev.target, m = cb.checked && /^Book the install date with (.+?)(\s*\(|$)/i.exec(it.text);
@@ -1002,6 +1002,13 @@
           .catch(function (e) { cb.checked = false; alert(e.message); });
       };
       li.querySelector('.x').onclick = function () { todoCall({ action: 'delete', id: it.id }); };
+      var dbtn = li.querySelector('[data-draft]');
+      if (dbtn) dbtn.onclick = function () {
+        // the follow-up email is written now, in front of you, and only goes into Gmail once you approve it
+        var m = it.meta;
+        openDrawer('chat');
+        ask('Draft follow-up email ' + m.stage + ' of ' + m.of + ' for ' + m.customer + (m.email ? ' (' + m.email + ')' : '') + ' about their proposal (Pylon project ' + m.projectId + ', sent about ' + m.sentDays + ' days ago). This one should be ' + m.brief + '. Look up the proposal for the system and price, keep it short and friendly, and show it to me for approval before it goes into Gmail.' + (m.email ? '' : ' There is no email address in Pylon for them, so ask me for it.'));
+      };
       list.appendChild(li);
     });
     var sd = $('todoShowDone'); sd.hidden = !done.length; sd.textContent = showDone ? 'Hide finished' : 'Show finished (' + done.length + ')';

@@ -38,7 +38,7 @@ const STAGE = [
   { text: (n) => 'Second follow-up for ' + n, brief: 'offer to answer questions, adjust the system size or battery, or talk through the numbers; suggest a quick call' },
   { text: (n) => 'Last follow-up for ' + n + ' (then keep warm or mark lost)', brief: 'a short, no-pressure close-the-loop: the price holds for now, they can reach out any time, and ask if they would like you to keep in touch' }
 ];
-async function followUpStep(s, p, name, google, today, budget) {
+async function followUpStep(s, p, name, google, today, budget) {   // google/budget.drafts no longer used for drafting
   const f = s.follow[p.id] || { stage: 0 };
   if (f.stopped || f.stage >= STAGE.length) return false;
   // previous touch: still open → wait; deleted (not ticked) → stop the sequence
@@ -60,21 +60,8 @@ async function followUpStep(s, p, name, google, today, budget) {
   if (f.lastAt && (Date.now() - Date.parse(f.lastAt)) / 864e5 < FOLLOW_DAYS[f.stage] - (FOLLOW_DAYS[f.stage - 1] || 0) - 0.5) return false;   // keep the gap since the last touch
   if (s.followDay.count >= FOLLOW_PER_DAY) return false;            // today's quota used: next run tomorrow
   const st = STAGE[f.stage];
-  let draftNote = '';
-  const email = p.customer && p.customer.email;
-  if (google.connected && email) {
-    if (budget.drafts <= 0 || Date.now() - budget.started > 12000) return false;   // write it next run, with its draft
-    try {
-      const ds = await pylon('/solar_designs/' + p.primary_design_id + '?fields[solar_designs]=' + DESIGN_FIELDS).catch(() => null);
-      const des = ds && ds.data ? pylonDesign(ds.data) : null;
-      const m = await claudeJSON({ system: 'You write short, friendly follow-up emails for Will at Eltra Energy, a Melbourne solar and battery installer. Australian English, plain and warm, no pressure, no exclamation marks, no sign-off name (the signature is added).',
-        prompt: 'Customer: ' + name + '. Proposal sent ' + Math.round(sentDays) + ' days ago, not signed yet. This is follow-up ' + (f.stage + 1) + ' of 3: ' + st.brief + '.' + (des ? ' System: ' + [des.solar_kw ? des.solar_kw + 'kW solar' : '', des.battery_kwh ? des.battery_kwh + 'kWh battery' : '', des.total ? 'total ' + des.total : ''].filter(Boolean).join(', ') + '.' : '') + ' 3-5 sentences, plus a subject line.',
-        schema: { type: 'object', properties: { subject: { type: 'string' }, body: { type: 'string' } }, required: ['subject', 'body'] }, maxTokens: 600, timeoutMs: 15000 });
-      await toolByName('gmail_create_draft').run({ to: email, subject: m.subject, body: m.body });
-      draftNote = ' (draft ready in Gmail)'; budget.drafts--;
-    } catch {}
-  }
-  const t = await addTodo({ owner: 'will', section: 'Quoting', text: st.text(name) + draftNote, due: today, ref: name + ' · auto' });
+  // no email is written here: the Draft email button on this to-do asks Eltra to draft it in front of Will, for approval
+  const t = await addTodo({ owner: 'will', section: 'Quoting', text: st.text(name), due: today, ref: name + ' · auto', meta: { kind: 'followup', stage: f.stage + 1, of: STAGE.length, customer: name, email: (p.customer && p.customer.email) || '', projectId: p.id, brief: st.brief, sentDays: Math.round(sentDays) } });
   s.follow[p.id] = { stage: f.stage + 1, lastAt: new Date().toISOString(), todoId: t.id };
   s.followDay.count++;
   return true;
