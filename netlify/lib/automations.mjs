@@ -144,7 +144,7 @@ async function automationsAsWill({ force = false } = {}) {
     const today = melbToday(0), inDays = (n) => melbToday(n);
     // switching over from the calendar-only version: jobs already under way don't get repeat reminders
     if (!s.jobsInit) {
-      for (const jb of jobs.list) if (jb.installDate) jb.flags = { stock: true, ces: jb.installDate < inDays(-1), comm: jb.installDate <= inDays(-14), ...(jb.flags || {}) };
+      for (const jb of jobs.list) if (jb.installDate) jb.flags = { ...(jb.flags || {}), stock: true, ces: jb.installDate < inDays(-1), comm: jb.installDate < today };
       s.jobsInit = true;
     }
     for (const jb of jobs.list) {
