@@ -3,6 +3,7 @@
 //  • a proposal has sat unsigned for 3+ days → a follow-up to-do (once per project)
 //  • a proposal or signed design includes Solar Victoria (battery rebate or interest-free loan) → a "Lodge Solar Victoria application" to-do (once per project)
 //  • an "Install - name" event appears in the calendar for a signed job → install date, DNSP pre-approval and stock to-dos, and a note to Will
+//  • every Monday morning → "Do payroll", every Saturday morning → "Do ServiceM8" (Ethan, Accounts, due that day)
 // Runs on a schedule (functions/automations.mjs) and whenever the dashboard loads the to-do list (at most every 15 min).
 import { store, runAs, melbToday } from './util.mjs';
 import { addTodo, loadTodos, updateTodo } from './todos.mjs';
@@ -144,6 +145,31 @@ async function installNotice(notes) {
   await sendTo(gs.email, { subject, html, text });
 }
 
+// Repeating weekly to-dos, added on the morning of the day (Melbourne time), due that day.
+const WEEKLY = [
+  { key: 'payroll', day: 'Mon', owner: 'ethan', section: 'Accounts', text: 'Do payroll' },
+  { key: 'servicem8', day: 'Sat', owner: 'ethan', section: 'Accounts', text: 'Do ServiceM8' },
+];
+const WEEKLY_FROM_HOUR = 6;
+function melbWeekdayHour() {
+  const p = Object.fromEntries(new Intl.DateTimeFormat('en-AU', { timeZone: 'Australia/Melbourne', weekday: 'short', hour: 'numeric', hourCycle: 'h23' }).formatToParts(new Date()).map((x) => [x.type, x.value]));
+  return { weekday: p.weekday, hour: +p.hour };
+}
+async function weeklyTodos(s) {
+  const { weekday, hour } = melbWeekdayHour(), today = melbToday(0), out = [];
+  s.weeklyDone = s.weeklyDone || {};
+  const due = WEEKLY.filter((w) => w.day === weekday && hour >= WEEKLY_FROM_HOUR && s.weeklyDone[w.key] !== today);
+  if (!due.length) return out;
+  const list = (await loadTodos()).items, same = (x, w) => String(x.text || '').trim().toLowerCase() === w.text.toLowerCase();
+  for (const w of due) {
+    // no doubling: skip if there's already one for today (ticked or not), or last week's is still open
+    const have = list.some((x) => same(x, w) && (x.due === today || !x.done));
+    if (!have) out.push(await addTodo({ owner: w.owner, section: w.section, text: w.text, due: today, ref: 'Weekly · auto' }));
+    s.weeklyDone[w.key] = today;
+  }
+  return out;
+}
+
 // Always run as Will: these jobs use his Gmail and calendar, even when Ethan's dashboard is what triggered the check.
 export const runAutomations = (opts = {}) => runAs('will', () => automationsAsWill(opts));
 async function automationsAsWill({ force = false } = {}) {
@@ -154,6 +180,9 @@ async function automationsAsWill({ force = false } = {}) {
   const google = await googleStatus().catch(() => ({ connected: false }));   // Will's Google (background jobs run as Will)
   const jobs = await loadJobs();
   let signedList = [];   // signed Pylon projects seen this run: { name, projectId }
+
+  // 0. Weekly repeating to-dos (done first so a Pylon or Google hiccup later can't hold them up)
+  try { added.push(...(await weeklyTodos(s))); } catch (e) { console.log('weekly to-dos failed', e.message); }
 
   if (pylonReady()) {
     // newest projects (last ~60): enough for a small team
