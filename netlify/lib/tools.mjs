@@ -625,21 +625,39 @@ tool({
     } else throw new Error('Give a Drive file_id or an email message_id');
     const isPdf = /pdf/.test(mime), isImg = /^image\/(jpeg|png|gif|webp)$/.test(mime);
     if (!isPdf && !isImg) return { name, note: 'Can only read PDFs and JPEG/PNG photos (this is ' + mime + ').' };
-    const fields = DOC_FIELDS[kind] || DOC_FIELDS.other, props = {};
-    Object.keys(fields).forEach((k) => { props[k] = { type: ['string', 'null'], description: fields[k] }; });
+    const fields = DOC_FIELDS[kind] || DOC_FIELDS.other, keys = Object.keys(fields);
+    // Ask for plain JSON in the prompt and parse it (newer models don't support a forced tool_choice).
+    const shape = keys.map((k) => '  "' + k + '": ' + fields[k]).join('\n');
     const model = await claudeModel(key);
     const res = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST', headers: { 'x-api-key': key, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
-      body: JSON.stringify({ model, max_tokens: 1500, tools: [{ name: 'details', description: 'Details read from the document', input_schema: { type: 'object', properties: props } }], tool_choice: { type: 'tool', name: 'details' },
+      body: JSON.stringify({ model, max_tokens: 1500,
         messages: [{ role: 'user', content: [
           isPdf ? { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: b64 } } : { type: 'image', source: { type: 'base64', media_type: mime, data: b64 } },
-          { type: 'text', text: 'Read this ' + (kind === 'bill' ? 'Australian electricity bill' : kind === 'ces' ? 'Victorian Certificate of Electrical Safety' : 'document') + ' and fill in the details. Copy numbers exactly as printed. Use null for anything not shown; never guess.' }
+          { type: 'text', text: 'Read this ' + (kind === 'bill' ? 'Australian electricity bill' : kind === 'ces' ? 'Victorian Certificate of Electrical Safety' : 'document') + ' and fill in the details. Copy numbers exactly as printed. Use null for anything not shown, cut off, blurry or otherwise unreadable; never guess.\n\nReply with only one JSON object (no other text, no code fence) with exactly these keys, each a string or null:\n{\n' + shape + '\n}' }
         ] }] })
     });
     const out = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error('Could not read the document: ' + ((out.error && out.error.message) || res.status));
-    const t = (out.content || []).find((c) => c.type === 'tool_use');
-    return { file: name, kind, details: t ? t.input : null };
+    const text = (out.content || []).filter((c) => c.type === 'text').map((c) => c.text).join('\n');
+    let parsed = null;
+    const a = text.indexOf('{'), z = text.lastIndexOf('}');
+    if (a >= 0 && z > a) { try { parsed = JSON.parse(text.slice(a, z + 1)); } catch {} }
+    if (!parsed || typeof parsed !== 'object') return { file: name, kind, details: null, note: 'I couldn\'t read the details from this document. Check the file is clear and try again, or read it yourself.' };
+    const details = {}, unreadable = [];
+    keys.forEach((k) => {
+      let v = parsed[k];
+      if (typeof v === 'string') { v = v.trim(); if (!v || /^(null|n\/?a|unknown|not (shown|visible|readable|legible)|unreadable|illegible)$/i.test(v)) v = null; }
+      else if (typeof v === 'number' || typeof v === 'boolean') v = String(v);
+      else v = null;
+      // An NMI is 10 or 11 letters/digits; anything else is a misread, so don't pass it on.
+      if (k === 'nmi' && v && !/^[A-Z0-9]{10,11}$/i.test(v.replace(/\s/g, ''))) v = null;
+      else if (k === 'nmi' && v) v = v.replace(/\s/g, '').toUpperCase();
+      details[k] = v; if (v === null) unreadable.push(k);
+    });
+    const r = { file: name, kind, details };
+    if (unreadable.length) { r.could_not_read = unreadable; r.note = 'Could not read ' + unreadable.map((k) => k === 'nmi' ? 'NMI' : k.replace(/_/g, ' ')).join(', ') + ' from this document, so I have left ' + (unreadable.length === 1 ? 'it' : 'them') + ' blank rather than guess.'; }
+    return r;
   }
 });
 
