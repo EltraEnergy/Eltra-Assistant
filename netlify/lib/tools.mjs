@@ -855,9 +855,9 @@ tool({
 // ---------- Improving Eltra (proposals need approval) ----------
 tool({
   name: 'suggest_improvement', group: 'core',
-  description: 'Propose an improvement to yourself (Eltra) for Will or Ethan to approve on the dashboard. Use it when you were asked for something you can\'t do, when a tool keeps failing, or when you notice a better way of working. kind "behaviour": a change to how you work, written as one clear instruction to yourself in change; it goes live when approved. kind "feature": needs new code or a new connection; put a short build brief in change. Don\'t propose things already possible.',
-  input_schema: { type: 'object', properties: { kind: { type: 'string', enum: ['behaviour', 'feature'] }, title: { type: 'string' }, why: { type: 'string' }, change: { type: 'string' } }, required: ['kind', 'title', 'why', 'change'] },
-  async run(i) { const it = await addProposal(i, 'chat'); return { proposed: { id: it.id, title: it.title, kind: it.kind }, note: 'It\'s waiting for approval in the Improvements panel on the dashboard.' }; }
+  description: 'Propose an improvement to yourself (Eltra) for Will or Ethan to approve on the dashboard. Use it when you were asked for something you can\'t do, when a tool keeps failing, or when you notice a better way of working. kind "behaviour": a change to how you work, written as one clear instruction to yourself in change; it goes live when approved. kind "feature": needs new code or a new connection, in Eltra or in the quote app (set app); put a short build brief in change. Approving a feature has Claude build it on GitHub, Will tries the preview, then makes it live. Don\'t propose things already possible.',
+  input_schema: { type: 'object', properties: { kind: { type: 'string', enum: ['behaviour', 'feature'] }, app: { type: 'string', enum: ['eltra', 'quote'], description: 'for a feature: which app the code change is for (Eltra herself, or the on-site quote app)' }, title: { type: 'string' }, why: { type: 'string' }, change: { type: 'string' } }, required: ['kind', 'title', 'why', 'change'] },
+  async run(i) { const it = await addProposal({ ...i, target: i.app }, 'chat'); return { proposed: { id: it.id, title: it.title, kind: it.kind }, note: 'It\'s waiting for approval in the Improvements panel on the dashboard.' }; }
 });
 
 

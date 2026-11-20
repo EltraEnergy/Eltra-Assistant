@@ -6,6 +6,7 @@
 import { store, currentUser } from './util.mjs';
 import { claudeJSON } from './claude.mjs';
 import crypto from 'node:crypto';
+import { startBuild, checkBuild, makeLive, undoBuild, discardBuild, buildReady, guessTarget, isSensitive } from './codebuild.mjs';
 
 const KEY = 'improve';
 export async function loadImprove() {
@@ -21,17 +22,31 @@ export async function logIssue(kind, text) {
     await save(d);
   } catch {}
 }
-export async function addProposal({ kind, title, why, change }, source = 'eltra') {
+export async function addProposal({ kind, title, why, change, target }, source = 'eltra') {
   const d = await loadImprove(), t = String(title || '').trim().slice(0, 120);
   if (!t) throw new Error('A proposal needs a title');
   const same = d.items.find((x) => x.title.toLowerCase() === t.toLowerCase() && x.status !== 'rejected');
   if (same) return same;
   const it = { id: crypto.randomBytes(5).toString('hex'), kind: kind === 'behaviour' ? 'behaviour' : 'feature', title: t, why: String(why || '').slice(0, 600), change: String(change || '').slice(0, 2500), source, status: 'proposed', createdAt: new Date().toISOString() };
+  if (it.kind === 'feature') it.target = target === 'quote' || target === 'eltra' ? target : guessTarget(t + ' ' + it.change);
   d.items.unshift(it); d.items = d.items.slice(0, 60); await save(d); return it;
 }
-export async function decide(id, action, by = currentUser()) {
+export async function decide(id, action, by = currentUser(), opts = {}) {
   const d = await loadImprove(), it = d.items.find((x) => x.id === id); if (!it) throw new Error('That proposal no longer exists');
-  if (action === 'approve') { it.status = it.kind === 'behaviour' ? 'live' : 'approved'; it.decidedBy = by; it.decidedAt = new Date().toISOString(); }
+  if (action === 'approve') {
+    it.decidedBy = by; it.decidedAt = new Date().toISOString();
+    if (it.kind === 'behaviour') it.status = 'live';
+    else if (buildReady(it.target)) {
+      // a code change: changes touching logins or keys need a second, explicit OK
+      if (isSensitive(it) && !opts.confirmSensitive) throw new Error('SENSITIVE');
+      it.build = { ...(await startBuild(it)), title: it.title }; it.status = 'building';
+    } else it.status = 'approved';
+  }
+  else if (action === 'target' && (opts.target === 'eltra' || opts.target === 'quote')) it.target = opts.target;
+  else if (action === 'live' && it.build && it.build.status === 'built') { await makeLive(it.build); it.status = 'live'; }
+  else if (action === 'undo' && it.build && it.build.status === 'live') { await undoBuild(it.build); it.status = 'undone'; }
+  else if (action === 'discard' && it.build) { await discardBuild(it.build); it.status = 'rejected'; it.decidedAt = new Date().toISOString(); }
+  else if (action === 'retry' && it.kind === 'feature') { it.build = { ...(await startBuild(it)), title: it.title }; it.status = 'building'; }
   else if (action === 'reject') { it.status = 'rejected'; it.decidedBy = by; it.decidedAt = new Date().toISOString(); }
   else if (action === 'done') it.status = 'live';
   else if (action === 'undo') it.status = 'proposed';
@@ -60,3 +75,18 @@ export async function reviewLog() {
   return n;
 }
 export const reviewDue = async () => { const d = await loadImprove(); return d.log.some((x) => Date.parse(x.at) > (d.reviewedAt ? Date.parse(d.reviewedAt) : 0)) && (!d.reviewedAt || Date.now() - Date.parse(d.reviewedAt) > 20 * 3600e3); };
+
+// check builds in progress (called when the dashboard loads the ideas; at most once a minute per build)
+export async function refreshBuilds() {
+  const d = await loadImprove(); let changed = false;
+  for (const it of d.items) {
+    const b = it.build;
+    if (!b || !['building', 'built'].includes(b.status) || (b.checkedAt && Date.now() - Date.parse(b.checkedAt) < 60000)) continue;
+    try { await checkBuild(b, it.title); } catch (e) { b.lastError = e.message; }
+    b.checkedAt = new Date().toISOString(); changed = true;
+    if (b.status === 'built') it.status = 'built';
+    if (b.status === 'failed') it.status = 'failed';
+  }
+  if (changed) await save(d);
+  return d;
+}

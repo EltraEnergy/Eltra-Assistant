@@ -927,10 +927,16 @@
 
   // ================= improvement ideas =================
   function loadImprove() { return api('improve').then(renderImprove).catch(function () {}); }
+  var impPoll = null, IMP = { items: [], canBuild: {} };
+  var APPNAME = { eltra: 'Eltra', quote: 'Quote app' };
   function renderImprove(d) {
-    var items = (d.items || []).filter(function (x) { return x.status === 'proposed' || x.status === 'approved'; }), box = $('impList'); box.textContent = '';
-    var learned = (d.items || []).filter(function (x) { return x.kind === 'behaviour' && x.status === 'live'; });
-    $('impPanel').hidden = !items.length && !learned.length; $('impCount').textContent = items.filter(function (x) { return x.status === 'proposed'; }).length + ' waiting · ' + learned.length + ' learned';
+    IMP = d || IMP;
+    var recent = function (x) { return Date.now() - Date.parse(x.build && (x.build.liveAt || x.build.undoneAt) || x.decidedAt || x.createdAt || 0) < 7 * 864e5; };
+    var items = (IMP.items || []).filter(function (x) { return ['proposed', 'approved', 'building', 'built', 'failed'].indexOf(x.status) >= 0 || (x.build && ['live', 'undone'].indexOf(x.status) >= 0 && recent(x)); });
+    var box = $('impList'); box.textContent = '';
+    var learned = (IMP.items || []).filter(function (x) { return x.kind === 'behaviour' && x.status === 'live'; });
+    $('impPanel').hidden = !items.length && !learned.length;
+    $('impCount').textContent = items.filter(function (x) { return x.status === 'proposed'; }).length + ' waiting · ' + learned.length + ' learned';
     if (learned.length) {
       var lh = document.createElement('details'); lh.className = 'learned';
       lh.innerHTML = '<summary>What Eltra has learned (' + learned.length + ')</summary>' + learned.map(function (x) { return '<div class="lrow"><span>' + esc(x.change) + '</span><button type="button" class="copy" data-unlearn="' + esc(x.id) + '">Remove</button></div>'; }).join('');
@@ -938,15 +944,52 @@
       box.appendChild(lh);
     }
     items.forEach(function (it) {
+      var b = it.build || {}, feature = it.kind !== 'behaviour', tgt = it.target || 'eltra', can = IMP.canBuild && IMP.canBuild[tgt];
       var el = document.createElement('div'); el.className = 'imp';
-      el.innerHTML = '<div class="t"><b>' + esc(it.title) + '</b><span class="k">' + (it.kind === 'behaviour' ? 'How Eltra works · goes live on approval' : 'New feature · needs a code update') + '</span></div><div class="why">' + esc(it.why) + '</div><div class="chg">' + esc(it.change) + '</div><div class="row"></div>';
-      var row = el.querySelector('.row'), add = function (label, cls, fn) { var x = document.createElement('button'); x.type = 'button'; x.className = 'btn' + (cls ? ' ' + cls : ''); x.textContent = label; x.onclick = fn; row.appendChild(x); };
-      if (it.status === 'proposed') { add('Approve', '', function () { decideImp(it.id, 'approve'); }); add('Not now', 'no', function () { decideImp(it.id, 'reject'); }); }
-      else {
-        add('Copy build brief', '', function (ev) { var t = 'Eltra improvement to build (approved): ' + it.title + '\nWhy: ' + it.why + '\n\n' + it.change + '\n\nRepo: Eltra-Assistant (Netlify). Make the change, keep existing behaviour working, and explain how to test it.'; (navigator.clipboard ? navigator.clipboard.writeText(t) : Promise.reject()).catch(function () { fallbackCopy(t); }).then(function () { ev.target.textContent = 'Copied ✓'; }); });
+      var head = '<div class="t"><b>' + esc(it.title) + '</b><span class="k">' + (feature ? 'New feature · ' + APPNAME[tgt] : 'How Eltra works · goes live on approval') + '</span></div>';
+      var body = '';
+      if (it.status === 'proposed' || it.status === 'approved') body = '<div class="why">' + esc(it.why) + '</div><div class="chg">' + esc(it.change) + '</div>';
+      if (it.status === 'building') body = '<div class="bstat">⏳ Claude is building it in ' + APPNAME[tgt] + '’s code. Usually 2 to 10 minutes; the preview appears here when it’s ready. ' + (b.issueUrl ? '<a href="' + esc(b.issueUrl) + '" target="_blank" rel="noopener">See it on GitHub</a>' : '') + '</div>';
+      if (it.status === 'built') body = '<div class="bstat ok">✅ Built. Try the preview, then make it live.</div>' + (b.summary ? '<details class="sum"><summary>What Claude changed</summary><pre>' + esc(b.summary) + '</pre></details>' : '');
+      if (it.status === 'failed') body = '<div class="bstat err">Didn’t build: ' + esc(b.error || b.lastError || 'unknown problem') + (b.issueUrl ? ' <a href="' + esc(b.issueUrl) + '" target="_blank" rel="noopener">Open on GitHub</a>' : '') + '</div>';
+      if (it.status === 'live') body = '<div class="bstat ok">Live since ' + esc(new Date(b.liveAt).toLocaleString('en-AU', { timeZone: TZ, weekday: 'short', hour: 'numeric', minute: '2-digit' })) + '.' + (b.prUrl ? ' <a href="' + esc(b.prUrl) + '" target="_blank" rel="noopener">The change on GitHub</a>' : '') + '</div>';
+      if (it.status === 'undone') body = '<div class="bstat">Undone: the previous version is live again' + (b.revertIssue ? ', and Claude is reverting the code (<a href="' + esc(b.revertIssue) + '" target="_blank" rel="noopener">GitHub</a>)' : '') + '.</div>';
+      el.innerHTML = head + body + '<div class="row"></div>';
+      var row = el.querySelector('.row'), add = function (label, cls, fn) { var x = document.createElement('button'); x.type = 'button'; x.className = 'btn' + (cls ? ' ' + cls : ''); x.textContent = label; x.onclick = fn; row.appendChild(x); return x; };
+      if (it.status === 'proposed') {
+        add(feature && can ? 'Approve & build' : 'Approve', '', function (e) { approveImp(it, e.target); });
+        add('Not now', 'no', function () { decideImp(it.id, 'reject'); });
+        if (feature) add('For: ' + APPNAME[tgt] + ' ⇄', 'no', function () { impCall({ id: it.id, action: 'target', target: tgt === 'eltra' ? 'quote' : 'eltra' }); });
+      } else if (it.status === 'approved') {
+        add('Copy build brief', '', function (ev) { var t = 'Eltra improvement to build (approved): ' + it.title + '\nWhy: ' + it.why + '\n\n' + it.change; (navigator.clipboard ? navigator.clipboard.writeText(t) : Promise.reject()).catch(function () { fallbackCopy(t); }).then(function () { ev.target.textContent = 'Copied ✓'; }); });
+        if (can) add('Build it now', 'no', function () { impCall({ id: it.id, action: 'retry' }); });
         add('Mark as live', 'no', function () { decideImp(it.id, 'done'); });
+      } else if (it.status === 'building') {
+        add('Check now', 'no', function () { loadImprove(); });
+        add('Cancel', 'no', function () { if (confirm('Cancel this build?')) impCall({ id: it.id, action: 'discard' }); });
+      } else if (it.status === 'built') {
+        if (b.previewUrl) { var a = document.createElement('a'); a.className = 'btn'; a.href = b.previewUrl; a.target = '_blank'; a.rel = 'noopener'; a.textContent = 'Try the preview'; row.appendChild(a); }
+        add('Make it live', b.previewUrl ? 'no' : '', function (e) { if (!confirm('Make this change live in ' + APPNAME[tgt] + '?')) return; e.target.disabled = true; e.target.textContent = 'Going live…'; impCall({ id: it.id, action: 'live' }); });
+        add('Discard', 'no', function () { if (confirm('Throw this change away?')) impCall({ id: it.id, action: 'discard' }); });
+      } else if (it.status === 'failed') {
+        add('Try again', '', function () { impCall({ id: it.id, action: 'retry' }); });
+        add('Discard', 'no', function () { impCall({ id: it.id, action: 'discard' }); });
+      } else if (it.status === 'live' && b.previousDeploy) {
+        add('Undo', 'no', function () { if (confirm('Put the previous version of ' + APPNAME[tgt] + ' back live?')) impCall({ id: it.id, action: 'undo' }); });
       }
       box.appendChild(el);
+    });
+    // while something is building, keep checking every minute
+    var busyNow = items.some(function (x) { return x.status === 'building'; });
+    if (busyNow && !impPoll) impPoll = setInterval(loadImprove, 60000);
+    if (!busyNow && impPoll) { clearInterval(impPoll); impPoll = null; }
+  }
+  function impCall(body) { return api('improve', { method: 'POST', body: body }).then(renderImprove).catch(function (e) { alert(e.message); loadImprove(); }); }
+  function approveImp(it, btn) {
+    btn.disabled = true; btn.textContent = 'Starting…';
+    api('improve', { method: 'POST', body: { id: it.id, action: 'approve' } }).then(renderImprove).catch(function (e) {
+      if (/logins|sensitive/i.test(e.message) && confirm('This change touches logins, passwords or keys. Are you sure you want Claude to build it?')) return impCall({ id: it.id, action: 'approve', confirmSensitive: true });
+      btn.disabled = false; btn.textContent = 'Approve'; if (!/logins|sensitive/i.test(e.message)) alert(e.message);
     });
   }
   function decideImp(id, action) { api('improve', { method: 'POST', body: { id: id, action: action } }).then(renderImprove).catch(function () {}); }
