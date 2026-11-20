@@ -1,6 +1,6 @@
 // The agent's tools. "action" tools change something (send, move, create) and only run after Will taps Approve.
 import { g, GMAIL, CAL, DRIVE, DRIVE_UP, accessToken } from './google.mjs';
-import { loadTodos, addTodo, updateTodo } from './todos.mjs';
+import { loadTodos, addTodo, updateTodo, addTodos, updateTodos } from './todos.mjs';
 import { currentUser } from './util.mjs';
 import { loadPrefs, portalFor } from './prefs.mjs';
 import { loadContent, updateItem } from './content.mjs';
@@ -636,6 +636,14 @@ tool({
 
 
 // ---------- To-do list (sections like DNSP, Quoting, Order stock) ----------
+const TODO_FIELDS = { text: { type: 'string' }, section: { type: 'string' }, due: { type: 'string' }, ref: { type: 'string' } };
+const UPDATE_FIELDS = { id: { type: 'string' }, done: { type: 'boolean' }, text: { type: 'string' }, section: { type: 'string' }, due: { type: 'string' }, for: { type: 'string', enum: ['will', 'ethan', 'both'] } };
+// one line per item so a failure is plain to see
+function batchReport(results, list, verb) {
+  const out = results.map((r, n) => (r.ok ? { ok: true, [verb]: r.item } : { ok: false, error: r.error, asked: list[n] }));
+  const failed = out.filter((r) => !r.ok).length;
+  return { summary: (out.length - failed) + ' of ' + out.length + ' ' + verb + (failed ? '; ' + failed + ' FAILED, tell the person which ones' : ''), results: out };
+}
 tool({
   name: 'todo_list', group: 'core',
   description: 'Show the to-do list. By default only the ones for the person you are talking to (and shared ones); whose: "everyone" shows the whole team\'s, "will" or "ethan" one person\'s. Optionally one section (e.g. "DNSP", "Quoting", "Order stock", "Install dates", "Accounts", "Socials", "Admin"). Includes ids for ticking things off.',
@@ -649,15 +657,30 @@ tool({
 });
 tool({
   name: 'todo_add', group: 'core',
-  description: 'Add a to-do. section: DNSP (pre-approvals, grid connections), Quoting, Order stock, Install dates (booking installs in), Accounts (invoicing, Xero/MYOB), Socials (Facebook/Instagram), Admin, or a new section name. Ethan looks after Order stock, Install dates, Accounts and Socials; Will does DNSP, Quoting and the rest, so if for is not given and the task clearly belongs to the other person, set for to them. for: "me" (default, the person you are talking to), "will", "ethan" or "both". due: YYYY-MM-DD if a day was given. ref: customer or job it relates to.',
-  input_schema: { type: 'object', properties: { text: { type: 'string' }, section: { type: 'string' }, for: { type: 'string', enum: ['me', 'will', 'ethan', 'both'] }, due: { type: 'string' }, ref: { type: 'string' } }, required: ['text'] },
-  async run(i) { const it = await addTodo({ ...i, owner: i.for }); return { added: it }; }
+  description: 'Add a to-do. section: DNSP (pre-approvals, grid connections), Quoting, Order stock, Install dates (booking installs in), Accounts (invoicing, Xero/MYOB), Socials (Facebook/Instagram), Admin, or a new section name. Ethan looks after Order stock, Install dates, Accounts and Socials; Will does DNSP, Quoting and the rest, so if for is not given and the task clearly belongs to the other person, set for to them. for: "me" (default, the person you are talking to), "will", "ethan" or "both". due: YYYY-MM-DD if a day was given. ref: customer or job it relates to. To add several to-dos, put them all in items in ONE call (never several todo_add calls at once, or some can be lost), then check each result and tell the person about any that failed.',
+  input_schema: { type: 'object', properties: { ...TODO_FIELDS, for: { type: 'string', enum: ['me', 'will', 'ethan', 'both'] }, items: { type: 'array', description: 'Several to-dos to add in one go, each with the same fields (text, section, for, due, ref).', items: { type: 'object', properties: { ...TODO_FIELDS, for: { type: 'string', enum: ['me', 'will', 'ethan', 'both'] } }, required: ['text'] } } } },
+  async run({ items, ...i }) {
+    if (Array.isArray(items) && items.length) {
+      const list = i.text ? [i, ...items] : items;
+      return batchReport(await addTodos(list.map((x) => ({ ...x, owner: x.for }))), list, 'added');
+    }
+    if (!i.text) throw new Error('A to-do needs some text');
+    const it = await addTodo({ ...i, owner: i.for }); return { added: it };
+  }
 });
 tool({
   name: 'todo_update', group: 'core',
-  description: 'Tick off (done: true), reopen, rename, move or re-date a to-do by id (get ids from todo_list).',
-  input_schema: { type: 'object', properties: { id: { type: 'string' }, done: { type: 'boolean' }, text: { type: 'string' }, section: { type: 'string' }, due: { type: 'string' }, for: { type: 'string', enum: ['will', 'ethan', 'both'] } }, required: ['id'] },
-  async run({ id, for: f, ...patch }) { if (f) patch.owner = f; const it = await updateTodo(id, patch); return { updated: it }; }
+  description: 'Tick off (done: true), reopen, rename, move or re-date a to-do by id (get ids from todo_list). To change several to-dos, put them all in updates in ONE call (never several todo_update calls at once, or some changes can be lost), then check each result and tell the person about any that failed.',
+  input_schema: { type: 'object', properties: { ...UPDATE_FIELDS, updates: { type: 'array', description: 'Several to-dos to change in one go, each with its id and the fields to change.', items: { type: 'object', properties: UPDATE_FIELDS, required: ['id'] } } } },
+  async run({ updates, ...one }) {
+    const patchOf = ({ for: f, ...patch }) => (f ? { ...patch, owner: f } : patch);
+    if (Array.isArray(updates) && updates.length) {
+      const list = one.id ? [one, ...updates] : updates;
+      return batchReport(await updateTodos(list.map(patchOf)), list, 'updated');
+    }
+    if (!one.id) throw new Error('Which to-do? Give its id (from todo_list).');
+    const it = await updateTodo(one.id, patchOf(one)); return { updated: it };
+  }
 });
 
 // ---------- Read a power bill, CES or other PDF/photo (Drive file or email attachment) ----------
