@@ -5,6 +5,7 @@ import { json, guard, melbNow, clip, currentUser } from '../lib/util.mjs';
 import { activeTools, toolByName, ghlReady, sm8Ready, pylonReady } from '../lib/tools.mjs';
 import { googleStatus } from '../lib/google.mjs';
 import { liveRules, logIssue } from '../lib/improve.mjs';
+import { invoiceBrief } from '../lib/invoices.mjs';
 
 let cachedModel = null;
 async function pickModel(key, skip) {
@@ -17,18 +18,19 @@ async function pickModel(key, skip) {
   return cachedModel;
 }
 
-function systemPrompt(gs, rules = []) {
+function systemPrompt(gs, rules = [], invoices = '') {
   const have = [gs.connected ? 'Gmail, Google Calendar and Google Drive (' + (gs.email || 'Will’s account') + ')' : null, ghlReady() ? 'GoHighLevel (leads pipeline)' : null, sm8Ready() ? 'ServiceM8 (jobs and scheduling)' : null, pylonReady() ? 'Pylon (solar designs, quotes and customer proposals)' : null].filter(Boolean);
   const ethan = currentUser() === 'ethan';
   const who = ethan ? [
     'WHO YOU ARE TALKING TO: Ethan, not Will. Ethan works with Will at Eltra Energy and looks after four things: ordering stock, setting install dates with customers, accounts and invoicing (Xero and MYOB), and the social media (Facebook and Instagram).',
     'Wherever these instructions mention Will’s Gmail, Calendar, Drive or voice, that means Ethan’s own Google account and Ethan’s voice. You cannot see Will’s email or calendar and must never claim to.',
     'Call him Ethan. Do not call him "sir". Keep the same calm, helpful tone.',
-    'For Ethan’s morning brief lead with: his to-dos (todo_list: Order stock, Install dates, Accounts and Socials), newly signed jobs that need stock ordered or an install date set, invoices to send or chase (pylon_find_projects with sold_only), supplier and customer emails in his inbox, and jobs coming up.',
+    'For Ethan’s morning brief lead with: his to-dos (todo_list: Order stock, Install dates, Accounts and Socials), newly signed jobs that need stock ordered or an install date set, invoices to send or chase (pylon_find_projects with sold_only), supplier and customer emails in his inbox, and jobs coming up. Always say which supplier invoices the daily invoice scan added to his Accounts to-dos (below).',
+    invoices || 'Daily invoice scan: no result from the last day yet (it runs early each morning; invoice_scan checks again now).',
     'Instagram account: if the instagram_ tools are available, Eltra is connected to the Eltra Energy Instagram. You can post photos and carousels (instagram_post, approved first), read real numbers (instagram_insights, use them for ig-audit instead of asking for screenshots), and read, reply to and hide comments. Photos Ethan attaches come with a "saved for posting" link; carousels made with instagram_carousel get a "Post to Instagram" button on their card that sends you the slide links. Reels and stories still have to be posted from the Instagram app.',
     'Instagram work must be quick: load each guide once per chat (if its text is already earlier in this chat, use it without loading again); don\'t ask questions you can reasonably assume, draft first and offer tweaks after; run instagram_humanize once and only go round again if it says FLAGGED; call independent tools together in one step rather than one after another. For research, go straight to instagram_research with sensible accounts unless Ethan named some, then report.',
         'Socials: for any Instagram work (captions, carousels, Reels, stories, the week\'s plan, comments, replies, DMs, profile, reviewing posts) first load the matching guide with instagram_skill and follow it, use the saved brand voice, and run every draft through instagram_humanize before showing it. Facebook posts can reuse the Instagram caption. He posts them himself; you can’t post for him.',
-    'Accounts: Xero and MYOB aren’t connected to you yet. Help with what you can (find invoices and supplier bills in his email, work out amounts from the pricing sheet, keep to-dos) and say plainly when something needs doing in Xero or MYOB.',
+    'Accounts: Xero and MYOB aren’t connected to you yet. Help with what you can (find invoices and supplier bills in his email, work out amounts from the pricing sheet, keep to-dos) and say plainly when something needs doing in Xero or MYOB. Every morning Eltra reads his and Will’s inboxes (read-only) for new supplier invoices and bills and adds them to his Accounts to-dos; invoice_scan runs that check again on request.',
     'New to-dos you add for Ethan are his unless he says they’re for Will.',
     ''
   ] : [];
@@ -153,6 +155,7 @@ export default async (req) => {
   // 2. Ask Claude
   const gs = await googleStatus().catch(() => ({ setUp: false, connected: false }));
   const rules = await liveRules().catch(() => []);
+  const invoices = currentUser() === 'ethan' ? await invoiceBrief().catch(() => '') : '';   // what this morning's invoice scan added
   const tools = activeTools().filter((t) => t.group !== 'google' || gs.connected).map((t) => ({ name: t.name, description: t.description, input_schema: t.input_schema }));
   if (tools.length) tools[tools.length - 1].cache_control = { type: 'ephemeral' };
   // Claude's own web search (for research such as what's working on Instagram). Turned off automatically if the
@@ -166,7 +169,7 @@ export default async (req) => {
     if (blocks.length) blocks[blocks.length - 1] = { ...blocks[blocks.length - 1], cache_control: { type: 'ephemeral' } };
     return { ...m, content: blocks };
   });
-  const body = (model) => JSON.stringify({ model, max_tokens: 3500, system: [{ type: 'text', text: systemPrompt(gs, rules) + (search ? '\n- You can search the web (web_search) for current information: research, trends, product details, regulations. Say where facts came from.' : ''), cache_control: { type: 'ephemeral' } }], tools: search ? tools.concat([{ type: 'web_search_20250305', name: 'web_search', max_uses: 4, user_location: { type: 'approximate', city: 'Melbourne', region: 'Victoria', country: 'AU', timezone: 'Australia/Melbourne' } }]) : tools, messages: sendMsgs });
+  const body = (model) => JSON.stringify({ model, max_tokens: 3500, system: [{ type: 'text', text: systemPrompt(gs, rules, invoices) + (search ? '\n- You can search the web (web_search) for current information: research, trends, product details, regulations. Say where facts came from.' : ''), cache_control: { type: 'ephemeral' } }], tools: search ? tools.concat([{ type: 'web_search_20250305', name: 'web_search', max_uses: 4, user_location: { type: 'approximate', city: 'Melbourne', region: 'Victoria', country: 'AU', timezone: 'Australia/Melbourne' } }]) : tools, messages: sendMsgs });
   let res, out;
   try {
     let model = await pickModel(key);
