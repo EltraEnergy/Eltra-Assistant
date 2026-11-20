@@ -26,6 +26,10 @@ export async function loadTodos() {
   return { sections, items, teamSections: true };
 }
 const save = (d) => store().setJSON(KEY, d);
+// One write at a time: each change loads, edits and saves the list before the next starts,
+// so two changes made together can't overwrite each other.
+let queue = Promise.resolve();
+const serial = (fn) => { const run = queue.then(fn, fn); queue = run.catch(() => {}); return run; };
 
 // match a section loosely: "dnsp", "stock", "order" → the right one; unknown names become a new section
 function pickSection(d, name, create) {
@@ -42,34 +46,55 @@ function pickSection(d, name, create) {
   return d.sections[0];
 }
 
-export async function addTodo({ section, text, due, ref, owner, meta }) {
-  const d = await loadTodos();
+function addOne(d, { section, text, due, ref, owner, meta }) {
   const item = { id: crypto.randomUUID().slice(0, 8), section: pickSection(d, section, true), text: str(text, 300), due: /^\d{4}-\d{2}-\d{2}$/.test(due || '') ? due : '', ref: str(ref, 200), owner: ownerOf(owner), by: currentUser(), done: false, createdAt: new Date().toISOString() };
   if (meta && typeof meta === 'object') item.meta = JSON.parse(JSON.stringify(meta, (k, v) => (typeof v === 'string' ? v.slice(0, 300) : v)));
   if (!item.text) throw new Error('A to-do needs some text');
-  d.items.push(item); await save(d); return item;
+  d.items.push(item); return item;
 }
-export async function updateTodo(id, patch) {
-  const d = await loadTodos(), it = d.items.find((x) => x.id === id);
+function updateOne(d, id, patch) {
+  const it = d.items.find((x) => x.id === id);
   if (!it) throw new Error('That to-do no longer exists');
   if (patch.text !== undefined) it.text = str(patch.text, 300) || it.text;
   if (patch.section !== undefined) it.section = pickSection(d, patch.section, true);
   if (patch.due !== undefined) it.due = /^\d{4}-\d{2}-\d{2}$/.test(patch.due || '') ? patch.due : '';
   if (patch.owner !== undefined) { it.owner = ownerOf(patch.owner); it.ownerSet = true; }
   if (patch.done !== undefined) { it.done = !!patch.done; it.doneAt = it.done ? new Date().toISOString() : undefined; }
-  await save(d); return it;
+  return it;
 }
-export async function deleteTodo(id) { const d = await loadTodos(); d.items = d.items.filter((x) => x.id !== id); await save(d); }
-export async function setSections(list) {
+export const addTodo = (input) => serial(async () => { const d = await loadTodos(), item = addOne(d, input); await save(d); return item; });
+export const updateTodo = (id, patch) => serial(async () => { const d = await loadTodos(), it = updateOne(d, id, patch); await save(d); return it; });
+
+// Several at once: apply each in turn to one copy of the list, save once, then read it back
+// to check every change actually stuck. Returns one result per item, in order: { ok, item } or { ok: false, error }.
+const same = (a, b) => ['text', 'section', 'due', 'done'].every((k) => (a[k] ?? '') === (b[k] ?? ''));
+async function batch(list, apply) {
+  return serial(async () => {
+    const d = await loadTodos();
+    const results = list.map((x) => { try { return { ok: true, item: apply(d, x) }; } catch (e) { return { ok: false, error: e.message || 'Failed' }; } });
+    if (!results.some((r) => r.ok)) return results;
+    try { await save(d); } catch (e) { return results.map((r) => (r.ok ? { ok: false, error: 'Not saved: ' + (e.message || 'storage error') } : r)); }
+    const check = await loadTodos();
+    return results.map((r) => {
+      if (!r.ok) return r;
+      const now = check.items.find((x) => x.id === r.item.id);
+      return now && same(now, r.item) ? { ok: true, item: now } : { ok: false, error: 'Didn’t stick (something else changed the list at the same time). Please try this one again.' };
+    });
+  });
+}
+export const addTodos = (items) => batch(Array.isArray(items) ? items : [], addOne);
+export const updateTodos = (updates) => batch(Array.isArray(updates) ? updates : [], (d, u) => updateOne(d, u && u.id, u || {}));
+export const deleteTodo = (id) => serial(async () => { const d = await loadTodos(); d.items = d.items.filter((x) => x.id !== id); await save(d); });
+export const setSections = (list) => serial(async () => {
   const d = await loadTodos(), clean = [...new Set((Array.isArray(list) ? list : []).map((s) => str(s, 40)).filter(Boolean))].slice(0, 12);
   if (!clean.length) throw new Error('Keep at least one section');
   d.items.forEach((it) => { if (!clean.includes(it.section)) it.section = clean[0]; });
   d.sections = clean; await save(d); return d;
-}
+});
 // tidy: drop finished items older than 30 days
-export async function pruneTodos() {
+export const pruneTodos = () => serial(async () => {
   const d = await loadTodos(), cut = Date.now() - 30 * 864e5, before = d.items.length;
   d.items = d.items.filter((x) => !x.done || !x.doneAt || Date.parse(x.doneAt) > cut);
   if (d.items.length !== before) await save(d);
   return d;
-}
+});
