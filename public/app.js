@@ -378,22 +378,69 @@
   }
   function clean(t) { return String(t).replace(/\*\*/g, '').replace(/^\s*[-•*]\s+/gm, '').replace(/https?:\/\/\S+/g, 'the link').slice(0, 1800); }
   function afterSpeech(fromReply) { speaking = false; quietUntil = Date.now() + 1800; if (busy) return; setState('idle', chat.approvals && chat.approvals.length ? 'Waiting for your OK' : 'Ready'); if (fromReply && $('convo').checked && canRecord) setTimeout(function () { if (!busy && !speaking) startListening(true); }, 250); }
+  // A small notice whenever the voice isn't the chosen ElevenLabs one, so it never changes silently.
+  var noticeT = null, toldNoKey = false, speakSeq = 0;
+  function voiceNotice(msg) { var t = $('voiceToast'); t.textContent = msg; t.hidden = false; clearTimeout(noticeT); noticeT = setTimeout(function () { t.hidden = true; }, 7000); }
   function speak(text, fromReply) {
     if (!$('speak').checked || !text) { afterSpeech(fromReply); return; }
     hush(); wakeStop(); lastSaid = String(text); quietUntil = Date.now() + 600000; speaking = true; setState('speaking', 'Speaking');
-    var useEleven = voices && voices.configured && vs.engine !== 'device';
-    if (!useEleven) return deviceSpeak(text, fromReply);
-    api('speak', { method: 'POST', body: { text: forVoice(sayable(clean(text))), voice_id: vs.voice || voices.default, speed: +$('rate').value || 1 }, raw: true })
-      .then(function (res) { return res.blob(); })
-      .then(function (blob) {
-        if (!speaking) return;
-        if (speakUrl) URL.revokeObjectURL(speakUrl);
-        speakUrl = URL.createObjectURL(blob); player.src = speakUrl;
-        player.onended = function () { afterSpeech(fromReply); };
-        player.onerror = function () { deviceSpeak(text, fromReply); };
-        return player.play().catch(function () { deviceSpeak(text, fromReply); });
+    if (vs.engine === 'device') return deviceSpeak(text, fromReply);
+    var my = ++speakSeq, failed = false, live = function () { return speaking && my === speakSeq && !failed; };
+    var fallback = function (why) {
+      if (!live()) return; failed = true; try { player.pause(); } catch (e) {}
+      voiceNotice('Couldn’t use your ElevenLabs voice' + (why ? ' (' + why + ')' : '') + ', so this reply used the browser voice.');
+      deviceSpeak(text, fromReply);
+    };
+    if (voices && !voices.configured) {
+      if (!toldNoKey) { toldNoKey = true; voiceNotice('ElevenLabs isn’t set up (no API key in Netlify), so Eltra is using the browser voice.'); }
+      return deviceSpeak(text, fromReply);
+    }
+    api('speak', { method: 'POST', body: { text: forVoice(sayable(clean(text))), voice_id: vs.voice || (voices && voices.default) || '', model: vs.model || '', stability: vs.stability, speed: +$('rate').value || 1 }, raw: true })
+      .then(function (res) {
+        if (!live()) { try { res.body && res.body.cancel(); } catch (e) {} return; }
+        var note = res.headers.get('X-Eltra-Voice-Note'); if (note) { try { voiceNotice(decodeURIComponent(note)); } catch (e) {} }
+        return playAudio(res, live, fallback, function () { if (my === speakSeq) afterSpeech(fromReply); });
       })
-      .catch(function () { if (speaking) deviceSpeak(text, fromReply); });
+      .catch(function (e) { fallback(e && e.message); });
+  }
+  // Play the reply as it streams in (MediaSource), so it starts talking before the whole clip has arrived.
+  // Browsers without streaming support (or if it ever fails) wait for the whole clip instead.
+  var MSC = window.ManagedMediaSource || window.MediaSource;
+  var canStream = !!(MSC && MSC.isTypeSupported && MSC.isTypeSupported('audio/mpeg') && window.ReadableStream) && !load('eltra-no-stream', false);
+  function playAudio(res, live, fail, done) {
+    if (speakUrl) { try { URL.revokeObjectURL(speakUrl); } catch (e) {} speakUrl = null; }
+    player.onended = done; player.onplaying = null;
+    if (!canStream || !res.body) {
+      return res.blob().then(function (blob) {
+        if (!live()) return;
+        speakUrl = URL.createObjectURL(blob); player.onerror = function () { fail('couldn’t play the audio'); }; player.src = speakUrl;
+        return player.play().catch(function () { fail('couldn’t play the audio'); });
+      });
+    }
+    var ms = new MSC(), reader = res.body.getReader(), queue = [], ended = false, started = false;
+    var stopStream = function () { canStream = false; save('eltra-no-stream', true); };
+    var bail = function (why, net) { try { reader.cancel(); } catch (e) {} if (!started && !net) stopStream(); fail(why); };
+    player.disableRemotePlayback = true;
+    player.onplaying = function () { started = true; };
+    player.onerror = function () { if (live()) bail('couldn’t play the audio'); };
+    ms.addEventListener('sourceopen', function () {
+      var sb; try { sb = ms.addSourceBuffer('audio/mpeg'); } catch (e) { bail('couldn’t play the audio'); return; }
+      var next = function () {
+        if (!live() || sb.updating) return;
+        if (queue.length) { try { sb.appendBuffer(queue.shift()); } catch (e) { bail('couldn’t play the audio'); } return; }
+        if (ended && ms.readyState === 'open') { try { ms.endOfStream(); } catch (e) {} }
+      };
+      sb.addEventListener('updateend', next);
+      (function pump() {
+        reader.read().then(function (r) {
+          if (!live()) { try { reader.cancel(); } catch (e) {} return; }
+          if (r.done) ended = true; else queue.push(r.value);
+          next(); if (!r.done) pump();
+        }).catch(function () { if (!live()) return; if (started) { ended = true; next(); } else bail('the audio stream dropped out', true); });
+      })();
+    }, { once: true });
+    speakUrl = URL.createObjectURL(ms); player.src = speakUrl;
+    return player.play().catch(function () { if (live()) bail('couldn’t play the audio'); });
   }
   function deviceVoice() { var v = ('speechSynthesis' in window) ? speechSynthesis.getVoices() : []; return v.filter(function (x) { return (x.voiceURI || x.name) === vs.device; })[0] || v.filter(function (x) { return /en-AU/i.test(x.lang); })[0] || v.filter(function (x) { return /^en/i.test(x.lang); })[0] || null; }
   function deviceSpeak(text, fromReply) {
@@ -403,24 +450,75 @@
     speaking = true; setState('speaking', 'Speaking'); speechSynthesis.speak(u);
   }
   function fillVoices() {
-    var sel = $('voiceSel'), h = '';
-    if (voices && voices.configured && voices.voices.length) {
+    var sel = $('voiceSel'), h = '', on = !!(voices && voices.configured);
+    if (on && voices.voices.length) {
       h += '<optgroup label="ElevenLabs">' + voices.voices.map(function (v) { return '<option value="el:' + esc(v.id) + '">' + esc(v.name + [v.accent, v.gender].filter(Boolean).map(function (x) { return ' · ' + x; }).join('')) + '</option>'; }).join('') + '</optgroup>';
-    }
+    } else if (on && vs.voice) h += '<optgroup label="ElevenLabs"><option value="el:' + esc(vs.voice) + '">' + esc(vs.voiceName || 'Your saved voice') + '</option></optgroup>';
     var dv = ('speechSynthesis' in window) ? speechSynthesis.getVoices().filter(function (v) { return /^en/i.test(v.lang); }) : [];
     if (dv.length) h += '<optgroup label="This device">' + dv.map(function (v) { return '<option value="dv:' + esc(v.voiceURI || v.name) + '">' + esc(v.name + ' · ' + v.lang) + '</option>'; }).join('') + '</optgroup>';
     sel.innerHTML = h || '<option>Device default</option>';
     sel.value = vs.engine === 'device' && vs.device ? 'dv:' + vs.device : 'el:' + (vs.voice || (voices && voices.default) || '');
     if (sel.selectedIndex < 0) sel.selectedIndex = 0;
-    $('voiceNote').textContent = voices && voices.configured ? (voices.error ? 'ElevenLabs: ' + voices.error : 'Add more voices in your ElevenLabs Voice Library and they appear here.') : 'Add ELEVENLABS_API_KEY in Netlify for natural voices.';
+    var models = (voices && voices.models) || [];
+    $('modelSel').innerHTML = models.map(function (m) { return '<option value="' + esc(m.id) + '">' + esc(m.name) + '</option>'; }).join('');
+    if (vs.model) $('modelSel').value = vs.model;
+    $('modelRow').hidden = $('stabRow').hidden = !on || vs.engine === 'device';
+    $('voiceNote').textContent = on ? (voices.error ? 'ElevenLabs: ' + voices.error : 'Your choice is saved and used on every device. Add voices in your ElevenLabs account and they appear here.') : !voices ? 'Couldn’t load your ElevenLabs voices. Check your connection and reload.' : 'ElevenLabs isn’t set up: add ELEVENLABS_API_KEY in Netlify for your ElevenLabs voices. Using this device’s voice for now.';
   }
-  $('voiceSel').onchange = function () { var v = $('voiceSel').value; if (v.indexOf('el:') === 0) { vs.engine = 'eleven'; vs.voice = v.slice(3); } else { vs.engine = 'device'; vs.device = v.slice(3); } save('eltra-hud-voice', vs); };
-  if (vs.rate) $('rate').value = vs.rate;
-  var showRate = function () { $('rateV').textContent = (+$('rate').value).toFixed(2) + '×'; }; showRate();
-  $('rate').oninput = function () { vs.rate = +$('rate').value; save('eltra-hud-voice', vs); showRate(); };
+  // Voice settings are saved on the server for each person, so every device and every reply uses the same voice.
+  var saveT = null;
+  function saveVoice() {
+    save('eltra-hud-voice', vs); clearTimeout(saveT); $('voiceSaved').textContent = '';
+    saveT = setTimeout(function () {
+      api('speak', { method: 'POST', body: { save: { engine: vs.engine === 'device' ? 'device' : 'eleven', voice: vs.voice || '', voice_name: vs.voiceName || '', model: vs.model || '', stability: vs.stability, speed: vs.rate || 1 } } })
+        .then(function () { $('voiceSaved').textContent = 'Saved'; }).catch(function (e) { $('voiceSaved').textContent = 'Couldn’t save: ' + e.message; });
+    }, 600);
+  }
+  function gotVoices(d) {
+    voices = d; var s = d.settings || {};
+    if (s.saved) {
+      vs.engine = s.engine; if (s.voice) vs.voice = s.voice; if (s.voice_name) vs.voiceName = s.voice_name;
+      vs.model = s.model; vs.stability = s.stability; vs.rate = s.speed; save('eltra-hud-voice', vs);
+    } else {
+      // first time: lock in what this device was using (or the default), so the voice doesn't change from here on
+      if (!vs.model) vs.model = s.model; if (vs.stability == null) vs.stability = s.stability;
+      if (!vs.voice && d.default) vs.voice = d.default;
+      if (d.configured && vs.voice) { vs.voiceName = nameOf(vs.voice) || vs.voiceName; saveVoice(); }
+    }
+    showVoiceSettings(); fillVoices();
+  }
+  function nameOf(id) { var v = voices && voices.voices ? voices.voices.filter(function (x) { return x.id === id; })[0] : null; return v ? v.name : ''; }
+  function showVoiceSettings() {
+    if (vs.rate) $('rate').value = vs.rate; showRate();
+    if (vs.stability != null) $('stab').value = vs.stability; showStab();
+  }
+  $('voiceSel').onchange = function () {
+    var v = $('voiceSel').value;
+    if (v.indexOf('el:') === 0) { vs.engine = 'eleven'; vs.voice = v.slice(3); vs.voiceName = nameOf(vs.voice) || vs.voiceName; } else { vs.engine = 'device'; vs.device = v.slice(3); }
+    $('modelRow').hidden = $('stabRow').hidden = !(voices && voices.configured) || vs.engine === 'device';
+    saveVoice();
+  };
+  $('modelSel').onchange = function () { vs.model = $('modelSel').value; saveVoice(); };
+  var showRate = function () { $('rateV').textContent = (+$('rate').value).toFixed(2) + '×'; };
+  var showStab = function () { $('stabV').textContent = Math.round(+$('stab').value * 100) + '%'; };
+  showVoiceSettings();
+  $('rate').oninput = function () { vs.rate = +$('rate').value; showRate(); saveVoice(); };
+  $('stab').oninput = function () { vs.stability = +$('stab').value; showStab(); saveVoice(); };
   $('speak').checked = vs.speak !== false; $('speak').onchange = function () { vs.speak = $('speak').checked; save('eltra-hud-voice', vs); if (!$('speak').checked) hush(); };
   $('convo').checked = !!vs.convo; $('convo').onchange = function () { vs.convo = $('convo').checked; save('eltra-hud-voice', vs); };
   $('testVoice').onclick = function () { unlockAudio(); var was = $('speak').checked; $('speak').checked = true; speak('G’day ' + me.name + ', I’m Eltra. This is how I’ll sound when I read out your brief.'); $('speak').checked = was; };
+  // ElevenLabs' own short sample of the voice (free, doesn't use your characters)
+  $('playSample').onclick = function () {
+    unlockAudio(); hush(); speakSeq++;
+    var v = $('voiceSel').value;
+    if (v.indexOf('dv:') === 0) { speaking = true; deviceSpeak('G’day, this is how this voice sounds.', false); return; }
+    var hit = voices && voices.voices ? voices.voices.filter(function (x) { return 'el:' + x.id === v; })[0] : null;
+    if (!hit || !hit.preview) { voiceNotice('There’s no sample for this voice. Try Test voice instead.'); return; }
+    speaking = true; setState('speaking', 'Playing sample'); player.onplaying = null;
+    player.onended = function () { afterSpeech(false); };
+    player.onerror = function () { voiceNotice('Couldn’t play the sample.'); afterSpeech(false); };
+    player.src = hit.preview; player.play().catch(function () { voiceNotice('Couldn’t play the sample.'); afterSpeech(false); });
+  };
   try { speechSynthesis.addEventListener('voiceschanged', fillVoices); } catch (e) {}
 
   // ================= voice in: record, stop on silence, transcribe =================
@@ -1080,7 +1178,7 @@
     chat = load(CHAT, null) || { messages: [], approvals: null, results: {}, decided: {} };
     tick(); setInterval(tick, 1000); setInterval(renderNext, 30000);
     render(); loadToday();
-    api('speak').then(function (d) { voices = d; fillVoices(); }).catch(function () { voices = { configured: false }; fillVoices(); });
+    api('speak').then(gotVoices).catch(function () { voices = null; fillVoices(); });
     if (/(google|instagram)=connected/.test(location.search)) history.replaceState(null, '', '/');
   }
   api('login').then(function (d) { if (d.loggedIn) { if (d.user) me = { user: d.user, name: d.name }; showApp(); } else showLogin(); }).catch(showLogin);
