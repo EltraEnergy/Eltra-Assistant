@@ -1,6 +1,7 @@
 // Automatic to-dos, so nothing slips:
 //  • a Pylon proposal gets signed  → pre-approval, stock order, install booking and welcome email to-dos
 //  • a proposal has sat unsigned for 3+ days → a follow-up to-do (once per project)
+//  • a proposal or signed design includes Solar Victoria (battery rebate or interest-free loan) → a "Lodge Solar Victoria application" to-do (once per project)
 // Runs on a schedule (functions/automations.mjs) and whenever the dashboard loads the to-do list (at most every 15 min).
 import { store, runAs, melbToday } from './util.mjs';
 import { addTodo, loadTodos } from './todos.mjs';
@@ -67,6 +68,40 @@ async function followUpStep(s, p, name, google, today, budget) {   // google/bud
   return true;
 }
 
+// ---- Solar Victoria applications ----
+// When a proposal (primary design) or the signed design mentions Solar Victoria – the battery rebate or the
+// interest-free loan – add one "Lodge Solar Victoria application" to-do for Will. Each design is checked once,
+// each project gets at most one to-do, and only a few designs are fetched per run to stay inside the time limit.
+const SV_RE = /solar\s*vic(toria)?\b|\bsv\s+(battery\s+)?(rebate|loan)|interest[\s-]*free\s+loan/i;
+const SV_PER_RUN = 4, SV_TEXT = 'Lodge Solar Victoria application';
+const hasSolarVic = (raw) => !!raw && SV_RE.test(JSON.stringify(raw.attributes || {}));
+async function solarVicStep(s, p, name, designIds, budget, loaded = []) {
+  const sv = s.sv[p.id] = s.sv[p.id] || { checked: [] };
+  if (sv.todoId) return false;                                       // already has its to-do
+  for (const id of designIds) {
+    if (!id || sv.checked.includes(id)) continue;
+    let raw = loaded.find((x) => x && x.id === id);
+    if (!raw) {
+      if (budget.svFetches >= SV_PER_RUN || Date.now() - budget.started > 12000) return false;   // try again next run
+      budget.svFetches++;
+      const d = await pylon('/solar_designs/' + encodeURIComponent(id) + '?fields[solar_designs]=' + DESIGN_FIELDS).catch(() => null);
+      if (!d || !d.data) continue;                                   // Pylon hiccup: not marked checked, so retried next run
+      raw = d.data;
+    }
+    sv.checked.push(id);
+    if (!hasSolarVic(raw)) continue;
+    // no duplicates: reuse a matching to-do already on the list (ticked or not)
+    const ref = name + ' · auto', low = norm(name);
+    const dupe = budget.todos.items.find((t) => t.text === SV_TEXT && norm(String(t.ref || '').replace(/ · auto$/, '')) === low);
+    if (dupe) { sv.todoId = dupe.id; return false; }
+    const t = await addTodo({ owner: 'will', section: 'Solar Victoria', text: SV_TEXT, due: melbToday(0), ref, meta: { kind: 'solarvic', customer: name, projectId: p.id, designId: id } });
+    budget.todos.items.push(t);
+    sv.todoId = t.id; sv.at = new Date().toISOString();
+    return t;
+  }
+  return false;
+}
+
 // Always run as Will: these jobs use his Gmail and calendar, even when Ethan's dashboard is what triggered the check.
 export const runAutomations = (opts = {}) => runAs('will', () => automationsAsWill(opts));
 async function automationsAsWill({ force = false } = {}) {
@@ -88,6 +123,8 @@ async function automationsAsWill({ force = false } = {}) {
     s.followed = [];
     const todos = await loadTodos();
     budget.todos = todos;
+    // Solar Victoria check: on its first run, skip proposals older than 14 days so old jobs don't flood the list
+    const svFirst = !s.sv; s.sv = s.sv || {}; budget.svFetches = 0;
     for (const raw of projects) {
       const p = pylonProject(raw), name = (p.customer && p.customer.name) || p.address || 'customer', attrs = raw.attributes || {};
       if (p.sold && !s.signed.includes(p.id)) {
@@ -99,6 +136,16 @@ async function automationsAsWill({ force = false } = {}) {
         const design = designs.find((x) => x.id === p.signed_design_id) || designs.find((x) => x.primary) || designs[0];
         for (const t of signedTasks(name, design)) added.push(await addTodo({ ...t, ref: name + ' · auto' }));
         upsertJob(jobs, { name, projectId: p.id, kit: kitOf(design) });
+        // just signed: check the signed design for Solar Victoria again (it may have changed since the proposal; designs already loaded)
+        const signedId = p.signed_design_id || (design && design.id);
+        if (s.sv[p.id]) s.sv[p.id].checked = s.sv[p.id].checked.filter((x) => x !== signedId);
+        if (await solarVicStep(s, p, name, [signedId], budget, ds.data || [])) added.push('solar-vic');
+      }
+      // proposal made or signed: check the proposal (primary design) and the signed design for Solar Victoria
+      if (attrs.is_committed && (p.primary_design_id || p.signed_design_id)) {
+        const ids = [p.signed_design_id, p.primary_design_id].filter(Boolean);
+        if (svFirst && !s.sv[p.id] && Date.now() - Date.parse(attrs.created_at || 0) > 14 * 864e5) s.sv[p.id] = { checked: ids, seeded: true };
+        else if (await solarVicStep(s, p, name, ids, budget)) added.push('solar-vic');
       }
       if (p.sold || !attrs.is_committed || !p.primary_design_id) continue;
       p.createdAt = attrs.created_at;
@@ -160,6 +207,7 @@ async function automationsAsWill({ force = false } = {}) {
   try { await sendWeeklySummaries(s); } catch {}
 
   s.signed = s.signed.slice(-500);
+  if (s.sv) { const keys = Object.keys(s.sv); keys.slice(0, Math.max(0, keys.length - 300)).forEach((k) => delete s.sv[k]); }   // keep the newest 300 projects
   delete s.installs; delete s.kits;
   if (s.follow) for (const k of Object.keys(s.follow)) if (s.follow[k].stopped || s.follow[k].stage >= 3) { if (Date.now() - Date.parse(s.follow[k].lastAt || 0) > 90 * 864e5) { delete s.follow[k]; if (s.designAt) delete s.designAt[k]; } }
   s.signedLog = s.signedLog.filter((x) => Date.now() - Date.parse(x.at) < 30 * 864e5);
