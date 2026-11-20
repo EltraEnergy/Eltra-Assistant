@@ -183,48 +183,118 @@ tool({
   }
 });
 const escHtml = (t) => String(t).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-// Will's default Gmail signature (Settings > Signature). Needs no extra permission: gmail.modify can read it.
-async function gmailSignature() {
+// Will's default send-as address and Gmail signature (Settings > Signature). Needs no extra permission: gmail.modify can read it.
+async function gmailSendAs() {
   try {
     const r = await g(GMAIL + '/settings/sendAs');
     const list = r.sendAs || [];
     const a = list.find((x) => x.isDefault) || list.find((x) => x.isPrimary) || list[0];
     const html = a && a.signature ? a.signature : '';
     const text = html ? html.replace(/<br\s*\/?>/gi, '\n').replace(/<\/(div|p|tr)>/gi, '\n').replace(/<[^>]+>/g, '').replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/\n{3,}/g, '\n\n').trim() : '';
-    return { html, text };
-  } catch (e) { return { html: '', text: '' }; }
+    return { html, text, email: (a && a.sendAsEmail) || '', name: (a && a.displayName) || '' };
+  } catch (e) { return { html: '', text: '', email: '', name: '' }; }
+}
+const oneLine = (s) => String(s || '').replace(/[\r\n]+/g, ' ').trim();   // keeps header values to one line
+// The message being replied to: the one named, or the latest real message in the thread (not a draft)
+async function replyTarget(reply_to_message_id, thread_id) {
+  const H = 'format=metadata&metadataHeaders=Message-ID&metadataHeaders=Subject&metadataHeaders=References';
+  if (reply_to_message_id) return g(GMAIL + '/messages/' + encodeURIComponent(reply_to_message_id) + '?' + H);
+  if (!thread_id) return null;
+  const t = await g(GMAIL + '/threads/' + encodeURIComponent(thread_id) + '?' + H);
+  const msgs = (t.messages || []).filter((m) => !(m.labelIds || []).includes('DRAFT'));
+  return msgs[msgs.length - 1] || { threadId: t.id, payload: { headers: [] } };
+}
+const replySubject = (o) => { const s = hdr(o, 'Subject'); return /^re:/i.test(s) ? s : 'Re: ' + s; };
+// Builds the email (text + HTML, with Will's signature underneath, threaded when it is a reply) as Gmail wants it
+async function buildEmail({ to, cc, subject, body, reply_to_message_id, thread_id }, sa) {
+  let threadId, extra = '';
+  const o = await replyTarget(reply_to_message_id, thread_id);
+  if (o) {
+    threadId = o.threadId || thread_id;
+    const mid = hdr(o, 'Message-ID'), refs = hdr(o, 'References');
+    if (mid) extra = 'In-Reply-To: ' + mid + '\r\nReferences: ' + (refs ? refs + ' ' : '') + mid + '\r\n';
+    if (!subject) subject = replySubject(o);
+  }
+  // Gmail doesn't add the signature to emails made through the API, so add Will's default signature here
+  // (HTML, with a plain-text copy) and send the email as text + HTML like Gmail does.
+  const sig = sa || await gmailSendAs();
+  body = String(body || '');
+  const textBody = body.replace(/\s+$/, '') + (sig.text ? '\n\n' + sig.text : '\nWill\nEltra Energy');
+  const htmlBody = '<div dir="ltr">' + escHtml(body.replace(/\s+$/, '')).replace(/\r?\n/g, '<br>') + (sig.html ? '<br><br><div class="gmail_signature" data-smartmail="gmail_signature">' + sig.html + '</div>' : '<br>Will<br>Eltra Energy') + '</div>';
+  const bnd = 'eltra_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+  const part = (type, txt) => '--' + bnd + '\r\nContent-Type: ' + type + '; charset=UTF-8\r\nContent-Transfer-Encoding: base64\r\n\r\n' + Buffer.from(txt).toString('base64').replace(/.{76}/g, '$&\r\n') + '\r\n';
+  const from = sig.email ? 'From: ' + (sig.name ? mimeWord('"' + oneLine(sig.name).replace(/"/g, '') + '"') + ' ' : '') + '<' + sig.email + '>\r\n' : '';
+  const raw = from + 'To: ' + oneLine(to) + '\r\n' + (cc ? 'Cc: ' + oneLine(cc) + '\r\n' : '') + 'Subject: ' + mimeWord(oneLine(subject)) + '\r\n' + extra +
+    'MIME-Version: 1.0\r\nContent-Type: multipart/alternative; boundary="' + bnd + '"\r\n\r\n' + part('text/plain', textBody) + part('text/html', htmlBody) + '--' + bnd + '--';
+  return { raw: b64url(raw), threadId, subject: oneLine(subject) };
 }
 tool({
   name: 'gmail_create_draft', group: 'google', action: true,
   // shown in full for approval first; it only goes into Gmail once approved
   async describe(i) { return { title: 'Put this email in Gmail as a draft' + (i.reply_to_message_id ? ' (reply)' : ''), lines: ['To: ' + (i.to || '(same thread)') + (i.cc ? '  ·  Cc: ' + i.cc : ''), 'Subject: ' + (i.subject || '(same as the thread)')], preview: i.body || '' }; },
-  description: 'Create an email DRAFT in Will’s Gmail (nothing is sent). To reply in an existing conversation, pass reply_to_message_id and the draft goes into that thread. Write in Will’s voice: friendly, plain Australian English, short. End the body with a short sign-off such as "Cheers," or "Thanks," and nothing after it: Will’s Gmail signature (name, details and logo) is added automatically underneath.',
+  description: 'Create an email DRAFT in Will’s Gmail (nothing is sent). Only use this when Will asks for a draft; to send an email use gmail_send. To reply in an existing conversation, pass reply_to_message_id and the draft goes into that thread. Write in Will’s voice: friendly, plain Australian English, short. End the body with a short sign-off such as "Cheers," or "Thanks," and nothing after it: Will’s Gmail signature (name, details and logo) is added automatically underneath.',
   input_schema: { type: 'object', properties: { to: { type: 'string', description: 'Comma-separated addresses' }, cc: { type: 'string' }, subject: { type: 'string' }, body: { type: 'string', description: 'Plain text' }, reply_to_message_id: { type: 'string' } }, required: ['to', 'body'] },
   async run({ to, cc, subject, body, reply_to_message_id }) {
-    let threadId, extra = '';
-    if (reply_to_message_id) {
-      const o = await g(GMAIL + '/messages/' + encodeURIComponent(reply_to_message_id) + '?format=metadata&metadataHeaders=Message-ID&metadataHeaders=Subject&metadataHeaders=References');
-      threadId = o.threadId;
-      const mid = hdr(o, 'Message-ID'), refs = hdr(o, 'References');
-      if (mid) extra = 'In-Reply-To: ' + mid + '\r\nReferences: ' + (refs ? refs + ' ' : '') + mid + '\r\n';
-      if (!subject) { const s = hdr(o, 'Subject'); subject = /^re:/i.test(s) ? s : 'Re: ' + s; }
+    const e = await buildEmail({ to, cc, subject, body, reply_to_message_id });
+    const d = await g(GMAIL + '/drafts', { method: 'POST', body: JSON.stringify({ message: { raw: e.raw, ...(e.threadId ? { threadId: e.threadId } : {}) } }) });
+    return { draft_id: d.id, saved: 'Draft saved in Gmail. It has NOT been sent.', to, subject: e.subject };
+  }
+});
+// One email or a batch (emails: [...]); either way it is one Approve card and nothing is sent until approved
+const MAX_SEND = 10;
+const emailList = (i) => (Array.isArray(i.emails) && i.emails.length ? i.emails : [i]).map((e) => e || {});
+tool({
+  name: 'gmail_send', group: 'google', action: true,
+  description: 'Send an email straight from Will’s Gmail (will@eltraenergy.com.au) with his Gmail signature added underneath. This is the normal way to send email: no draft is made, Will sees the whole email in one Approve card and it is sent the moment he approves. To reply in a conversation pass reply_to_message_id (or thread_id) so it stays in that thread; the subject is filled in from the thread if left out. To send several emails with one approval (e.g. a batch of follow-ups), pass them in emails (up to ' + MAX_SEND + '); for one card per email, call this tool once per email in the same step. Write in Will’s voice: friendly, plain Australian English, short. End the body with a short sign-off such as "Cheers," or "Thanks," and nothing after it.',
+  input_schema: {
+    type: 'object',
+    properties: {
+      to: { type: 'string', description: 'Comma-separated addresses' }, cc: { type: 'string' }, subject: { type: 'string' }, body: { type: 'string', description: 'Plain text' },
+      reply_to_message_id: { type: 'string' }, thread_id: { type: 'string', description: 'Reply in this thread (to its latest message) when there is no message id' },
+      emails: { type: 'array', description: 'Several emails to send with one approval. Use instead of the single-email fields.', items: { type: 'object', properties: { to: { type: 'string' }, cc: { type: 'string' }, subject: { type: 'string' }, body: { type: 'string' }, reply_to_message_id: { type: 'string' }, thread_id: { type: 'string' } }, required: ['to', 'body'] } }
     }
-    // Gmail doesn't add the signature to drafts made through the API, so add Will's default signature here
-    // (HTML, with a plain-text copy) and send the email as text + HTML like Gmail does.
-    const sig = await gmailSignature();
-    const textBody = body.replace(/\s+$/, '') + (sig.text ? '\n\n' + sig.text : '\nWill\nEltra Energy');
-    const htmlBody = '<div dir="ltr">' + escHtml(body.replace(/\s+$/, '')).replace(/\r?\n/g, '<br>') + (sig.html ? '<br><br><div class="gmail_signature" data-smartmail="gmail_signature">' + sig.html + '</div>' : '<br>Will<br>Eltra Energy') + '</div>';
-    const bnd = 'eltra_' + Date.now().toString(36);
-    const part = (type, txt) => '--' + bnd + '\r\nContent-Type: ' + type + '; charset=UTF-8\r\nContent-Transfer-Encoding: base64\r\n\r\n' + Buffer.from(txt).toString('base64').replace(/.{76}/g, '$&\r\n') + '\r\n';
-    const raw = 'To: ' + to + '\r\n' + (cc ? 'Cc: ' + cc + '\r\n' : '') + 'Subject: ' + mimeWord(subject || '') + '\r\n' + extra +
-      'MIME-Version: 1.0\r\nContent-Type: multipart/alternative; boundary="' + bnd + '"\r\n\r\n' + part('text/plain', textBody) + part('text/html', htmlBody) + '--' + bnd + '--';
-    const d = await g(GMAIL + '/drafts', { method: 'POST', body: JSON.stringify({ message: { raw: b64url(raw), ...(threadId ? { threadId } : {}) } }) });
-    return { draft_id: d.id, saved: 'Draft saved in Gmail. It has NOT been sent.', to, subject };
+  },
+  async describe(i) {
+    const list = emailList(i);
+    const sa = await gmailSendAs();
+    // fill in the subject of replies so the card shows exactly what goes out (read-only lookups)
+    const subj = await Promise.all(list.map((e) => e.subject ? e.subject : (e.reply_to_message_id || e.thread_id) ? replyTarget(e.reply_to_message_id, e.thread_id).then(replySubject).catch(() => '(same as the thread)') : '(no subject)'));
+    const head = (e, k) => ['To: ' + (e.to || '(missing)') + (e.cc ? '  ·  Cc: ' + e.cc : ''), 'Subject: ' + subj[k] + (e.reply_to_message_id || e.thread_id ? '  (reply in the same thread)' : '')];
+    const from = 'From: ' + (sa.email || 'your Gmail');
+    if (list.length === 1) {
+      return { title: 'Send this email' + (list[0].reply_to_message_id || list[0].thread_id ? ' (reply)' : ''), lines: [from].concat(head(list[0], 0)), preview: String(list[0].body || '').replace(/\s+$/, '') + '\n\n' + (sa.text || 'Will\nEltra Energy') };
+    }
+    return {
+      title: 'Send these ' + list.length + ' emails' + (list.length > MAX_SEND ? ' (only ' + MAX_SEND + ' can go at once, so this will be refused)' : ''),
+      lines: [from, 'Your Gmail signature is added under each one.'],
+      preview: list.map((e, k) => (k + 1) + '. ' + head(e, k).join('\n') + '\n\n' + String(e.body || '').replace(/\s+$/, '')).join('\n\n————————\n\n')
+    };
+  },
+  async run(i) {
+    const list = emailList(i);
+    if (list.length > MAX_SEND) throw new Error('Too many emails at once (' + list.length + '). Send up to ' + MAX_SEND + ' per approval. Nothing was sent.');
+    const bad = list.findIndex((e) => !oneLine(e.to) || !String(e.body || '').trim());
+    if (bad >= 0) throw new Error('Email ' + (bad + 1) + ' is missing who it goes to or the message. Nothing was sent.');
+    const sa = await gmailSendAs();
+    const out = new Array(list.length);
+    // a few at a time, to stay inside Gmail's sending limits and Netlify's time limit
+    for (let k = 0; k < list.length; k += 3) {
+      await Promise.all(list.slice(k, k + 3).map(async (e, j) => {
+        const n = k + j;
+        try {
+          const m = await buildEmail(e, sa);
+          const s = await g(GMAIL + '/messages/send', { method: 'POST', body: JSON.stringify({ raw: m.raw, ...(m.threadId ? { threadId: m.threadId } : {}) }) });
+          out[n] = { sent: true, to: e.to, subject: m.subject, message_id: s.id, thread_id: s.threadId };
+        } catch (err) { out[n] = { sent: false, to: e.to, error: err.message || 'Failed' }; }
+      }));
+    }
+    if (out.length === 1) { if (!out[0].sent) throw new Error(out[0].error); return out[0]; }
+    return { sent: out.filter((x) => x.sent).length, failed: out.filter((x) => !x.sent).length, emails: out };
   }
 });
 tool({
   name: 'gmail_send_draft', group: 'google', action: true,
-  description: 'Send a Gmail draft. Only when Will has clearly asked to send it. Will approves it on screen first.',
+  description: 'Send a Gmail draft that already exists. Only when Will has clearly asked to send that draft. To send a new email or reply, use gmail_send instead (no draft needed). Will approves it on screen first.',
   input_schema: { type: 'object', properties: { draft_id: { type: 'string' } }, required: ['draft_id'] },
   async describe({ draft_id }) {
     const d = await g(GMAIL + '/drafts/' + encodeURIComponent(draft_id) + '?format=full');
