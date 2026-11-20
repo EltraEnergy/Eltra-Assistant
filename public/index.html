@@ -117,6 +117,9 @@
   .vgrid select { font: inherit; font-size: 15px; color: var(--ink); background: #fff; border: 1px solid var(--line); border-radius: 8px; padding: 7px; width: 100%; }
   .vgrid input[type=range] { width: 100%; accent-color: var(--blue); }
   .vgrid small { font-size: 13px; color: var(--dim); line-height: 1.35; }
+  .vgrid [hidden] { display: none; }
+  .vgrid .vrow { display: flex; gap: 8px; align-items: center; } .vgrid .vrow select { flex: 1; min-width: 0; } .vgrid .vrow .btn { white-space: nowrap; padding: 8px 12px; }
+  .vtoast { position: fixed; left: 50%; bottom: 96px; transform: translateX(-50%); z-index: 60; max-width: min(92vw, 460px); background: var(--ink); color: #fff; font-size: 13.5px; line-height: 1.35; padding: 9px 14px; border-radius: 10px; box-shadow: 0 4px 18px rgba(0,0,0,.18); }
   .vside { display: grid; grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr) auto auto; min-width: 0; }
   .log { max-height: 440px; min-height: 210px; overflow-y: auto; padding: 16px 18px; display: flex; flex-direction: column; gap: 12px; }
   .m { max-width: 86%; font-size: 15.5px; overflow-wrap: anywhere; }
@@ -536,11 +539,14 @@
         <small id="wakeHeard" class="heard" aria-live="polite"></small>
       </div>
     <div class="vgrid">
-          <label for="voiceSel">Voice<select id="voiceSel"></select></label>
+          <label for="voiceSel">Voice<span class="vrow"><select id="voiceSel"></select><button type="button" class="btn no" id="playSample">Play sample</button></span></label>
+          <label for="modelSel" id="modelRow">Model<select id="modelSel"></select></label>
+          <label for="stab" id="stabRow">Stability <span id="stabV"></span><input type="range" id="stab" min="0" max="1" step="0.05" value="0.8"><small>Higher sounds steadier and the same every time. Lower is more expressive.</small></label>
           <label for="micSens">Microphone sensitivity<select id="micSens"><option value="normal">Normal</option><option value="high">High (recommended)</option><option value="max">Very high (quiet voice or far from the mic)</option></select></label>
-          <label for="rate">Speed <span id="rateV"></span><input type="range" id="rate" min="0.8" max="1.2" step="0.02" value="1"></label>
+          <label for="rate">Speed <span id="rateV"></span><input type="range" id="rate" min="0.7" max="1.2" step="0.02" value="1"></label>
           <button type="button" class="btn" id="testVoice">Test voice</button>
           <small id="voiceNote"></small>
+          <small id="voiceSaved" aria-live="polite"></small>
         </div>
     <h3>DNSP portals</h3>
     <p class="vhint" style="max-width:none; text-align:left">The page you log in to for each distributor. Eltra adds an “Open portal” button to pre-approval and commissioning tasks.</p>
@@ -554,6 +560,7 @@
   </div>
 </aside>
 </div>
+<div class="vtoast" id="voiceToast" role="status" aria-live="polite" hidden></div>
 <div class="sleep" id="sleepView" hidden aria-live="polite">
   <div class="inner">
     <img src="logo.png" alt="Eltra Energy">
