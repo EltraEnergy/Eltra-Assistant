@@ -1,5 +1,5 @@
 // Automatic to-dos, so nothing slips:
-//  • a Pylon proposal gets signed  → pre-approval, stock order, install booking and welcome email to-dos
+//  • a Pylon proposal gets signed  → install booking and DNSP pre-approval to-dos (plus the welcome email to-do when WELCOME_EMAIL_TODO is on)
 //  • a proposal has sat unsigned for 3+ days → a follow-up to-do (once per project)
 //  • a proposal or signed design includes Solar Victoria (battery rebate or interest-free loan) → a "Lodge Solar Victoria application" to-do (once per project)
 //  • an "Install - name" event appears in the calendar for a signed job → install date, DNSP pre-approval and stock to-dos, and a note to Will
@@ -16,14 +16,19 @@ import { loadJobs, saveJobs, upsertJob, setInstall, findJob, normName } from './
 const STATE = 'automations';
 const dayPlus = (n) => { const d = new Date(Date.now() + n * 864e5); return d.toLocaleDateString('en-CA', { timeZone: 'Australia/Melbourne' }); };
 
+// Switched off until Will has written a welcome / next steps email template.
+// Set to true (or set the Netlify env var WELCOME_EMAIL_TODO=on) to add the to-do again when a job is signed.
+const WELCOME_EMAIL_TODO = false;
+const welcomeEmailTodoOn = () => WELCOME_EMAIL_TODO || /^(1|true|on|yes)$/i.test(String(process.env.WELCOME_EMAIL_TODO || '').trim());
+
 // What gets added when a job is signed. Sections must match (or loosely match) your to-do sections.
 function signedTasks(name, design) {
   const kit = design ? [design.panels.join('; '), design.inverters.join('; '), design.batteries.join('; ')].filter(Boolean).join(' · ') : '';
   return [
-    { section: 'Admin', text: 'Send ' + name + ' the welcome / next steps email', due: dayPlus(0), owner: 'will' },
+    welcomeEmailTodoOn() && { section: 'Admin', text: 'Send ' + name + ' the welcome / next steps email', due: dayPlus(0), owner: 'will' },
     { section: 'Install dates', text: 'Book the install date with ' + name, due: dayPlus(1), owner: 'ethan' },
     { section: 'DNSP', text: 'Lodge the DNSP pre-approval for ' + name, due: dayPlus(1), owner: 'will' }
-  ];   // ordering stock comes a week before the install date (see the install check)
+  ].filter(Boolean);   // ordering stock comes a week before the install date (see the install check)
 }
 const kitOf = (design) => design ? [design.panels.join('; '), design.inverters.join('; '), design.batteries.join('; ')].filter(Boolean).join(' · ') : '';
 const norm = (t) => String(t || '').toLowerCase().replace(/[^a-z0-9 ]/g, ' ').replace(/\s+/g, ' ').trim();
