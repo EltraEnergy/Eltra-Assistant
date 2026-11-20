@@ -2,14 +2,15 @@
 //  • a Pylon proposal gets signed  → pre-approval, stock order, install booking and welcome email to-dos
 //  • a proposal has sat unsigned for 3+ days → a follow-up to-do (once per project)
 //  • a proposal or signed design includes Solar Victoria (battery rebate or interest-free loan) → a "Lodge Solar Victoria application" to-do (once per project)
+//  • an "Install - name" event appears in the calendar for a signed job → install date, DNSP pre-approval and stock to-dos, and a note to Will
 // Runs on a schedule (functions/automations.mjs) and whenever the dashboard loads the to-do list (at most every 15 min).
 import { store, runAs, melbToday } from './util.mjs';
-import { addTodo, loadTodos } from './todos.mjs';
+import { addTodo, loadTodos, updateTodo } from './todos.mjs';
 import { pylon, pylonReady, pylonProject, pylonDesign, DESIGN_FIELDS, toolByName } from './tools.mjs';
 import { googleStatus, g, CAL } from './google.mjs';
 import { claudeJSON } from './claude.mjs';
-import { sendWeeklySummaries } from './weekly.mjs';
-import { loadJobs, saveJobs, upsertJob, setInstall } from './jobs.mjs';
+import { sendWeeklySummaries, sendTo } from './weekly.mjs';
+import { loadJobs, saveJobs, upsertJob, setInstall, findJob, normName } from './jobs.mjs';
 
 const STATE = 'automations';
 const dayPlus = (n) => { const d = new Date(Date.now() + n * 864e5); return d.toLocaleDateString('en-CA', { timeZone: 'Australia/Melbourne' }); };
@@ -102,6 +103,47 @@ async function solarVicStep(s, p, name, designIds, budget, loaded = []) {
   return false;
 }
 
+// ---- Installs booked in the calendar ----
+// "Install - Sarah Smith" (or "Installation – …", "Install: …") → the customer name after the dash
+const INSTALL_TITLE = /^\s*install(ation)?\s*[-–—:]\s*(.+?)\s*$/i;
+// the signed Pylon job for a calendar name: exact name first, otherwise one clear loose match (never a guess between two)
+function signedMatch(signedList, jobs, who) {
+  const w = normName(who); if (w.length < 3) return null;
+  const pool = signedList.concat(jobs.list.filter((j) => j.projectId && !j.unsigned && !j.closed).map((j) => ({ name: j.name, projectId: j.projectId })));
+  const exact = pool.find((p) => normName(p.name) === w); if (exact) return exact;
+  const loose = pool.filter((p) => { const n = normName(p.name); return n.length >= 3 && (w.includes(n) || n.includes(w)); });
+  return new Set(loose.map((p) => p.projectId)).size === 1 ? loose[0] : null;
+}
+const before = (day, n, today) => { const d = new Date(Date.parse(day + 'T12:00:00Z') - n * 864e5).toISOString().slice(0, 10); return d < today ? today : d; };
+// the to-dos for a newly booked install; returns a line for Will's note
+async function installBooked(jb, today, added) {
+  const todos = await loadTodos(), low = normName(jb.name), day = jb.installDate, done = [];
+  const forJob = (re) => todos.items.find((t) => re.test(t.text || '') && normName(t.text).includes(low));
+  // DNSP pre-approval for Will, due a week before the install (or today if it's sooner). Reuse an open one from signing.
+  const dnspDue = before(day, 7, today), dnsp = forJob(/dnsp pre.?approval/i);
+  if (dnsp && dnsp.done) done.push('DNSP pre-approval already lodged');
+  else if (dnsp) { if (!dnsp.due || dnsp.due > dnspDue) await updateTodo(dnsp.id, { due: dnspDue }); done.push('DNSP pre-approval to-do (yours) now due ' + dnspDue); }
+  else { added.push(await addTodo({ owner: 'will', section: 'DNSP', text: 'Lodge the DNSP pre-approval for ' + jb.name + ' (install ' + day + ')', due: dnspDue, ref: jb.name + ' · auto' })); done.push('DNSP pre-approval to-do for you, due ' + dnspDue); }
+  // stock order for Ethan, a week before the install (once only: the week-before reminder below then skips it)
+  if (forJob(/order stock/i)) done.push('stock order to-do for Ethan was already there');
+  else { added.push(await addTodo({ owner: 'ethan', section: 'Order stock', text: 'Order stock for ' + jb.name + ' (install ' + day + ')' + (jb.kit ? ': ' + jb.kit : ''), due: before(day, 7, today), ref: jb.name + ' · auto' })); done.push('stock order to-do for Ethan'); }
+  jb.flags = { ...(jb.flags || {}), stock: true };
+  return { name: jb.name, day, done };
+}
+// a short email to Will (from his own Gmail to himself) listing what was added
+async function installNotice(notes) {
+  const gs = await googleStatus().catch(() => ({}));
+  if (!notes.length || !gs.connected || !gs.email) return;
+  const esc = (t) => String(t).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+  const fmt = (d) => new Date(d + 'T12:00:00Z').toLocaleDateString('en-AU', { weekday: 'short', day: 'numeric', month: 'short' });
+  const subject = notes.length === 1 ? 'Install booked: ' + notes[0].name + ', ' + fmt(notes[0].day) : notes.length + ' installs booked in the calendar';
+  const text = 'Eltra spotted ' + (notes.length === 1 ? 'a new install' : 'new installs') + ' in the calendar for signed jobs:\n\n' + notes.map((n) => '• ' + n.name + ' – ' + fmt(n.day) + '\n  ' + n.done.join('\n  ')).join('\n') + '\n\nOpen Eltra to see the to-dos.';
+  const html = '<div style="font-family:-apple-system,Segoe UI,Arial,sans-serif;color:#14263D;max-width:560px"><p>Eltra spotted ' + (notes.length === 1 ? 'a new install' : 'new installs') + ' in the calendar for signed jobs:</p><ul>' +
+    notes.map((n) => '<li><b>' + esc(n.name) + '</b> – ' + fmt(n.day) + '<br><span style="color:#5D6E82">' + n.done.map(esc).join('<br>') + '</span></li>').join('') +
+    '</ul><p style="color:#5D6E82;font-size:13px">Open Eltra to see the to-dos: <a href="https://eltra-assistant.netlify.app">eltra-assistant.netlify.app</a></p></div>';
+  await sendTo(gs.email, { subject, html, text });
+}
+
 // Always run as Will: these jobs use his Gmail and calendar, even when Ethan's dashboard is what triggered the check.
 export const runAutomations = (opts = {}) => runAs('will', () => automationsAsWill(opts));
 async function automationsAsWill({ force = false } = {}) {
@@ -111,11 +153,13 @@ async function automationsAsWill({ force = false } = {}) {
   const first = !s.lastRun, added = [], started = Date.now();
   const google = await googleStatus().catch(() => ({ connected: false }));   // Will's Google (background jobs run as Will)
   const jobs = await loadJobs();
+  let signedList = [];   // signed Pylon projects seen this run: { name, projectId }
 
   if (pylonReady()) {
     // newest projects (last ~60): enough for a small team
     let url = '/solar_projects?sort=created_at.desc&filter[is_archived]=false', projects = [];
     for (let page = 0; url && page < 4; page++) { const d = await pylon(url.replace('https://api.getpylon.com/v1', '')); projects = projects.concat(d.data || []); url = d.links && d.links.next; }
+    signedList = projects.map(pylonProject).filter((p) => p.sold && p.customer && p.customer.name).map((p) => ({ name: p.customer.name, projectId: p.id }));
     const today = melbToday(0), budget = { drafts: 2, started };
     s.follow = s.follow || {}; s.followDay = s.followDay && s.followDay.date === today ? s.followDay : { date: today, count: 0 };
     // older single follow-ups count as stage 1 already done
@@ -153,9 +197,15 @@ async function automationsAsWill({ force = false } = {}) {
     }
   }
 
-  // 1. Calendars as a backup source of install dates: "Install – name" events in Will's or Ethan's calendar.
-  if (!s.calCheckedAt || Date.now() - Date.parse(s.calCheckedAt) > 2 * 3600e3) {
+  // 1. Calendars: "Install – name" events in Will's or Ethan's calendar, checked every hour.
+  //    An event for a signed Pylon job that Eltra has no install date for yet is a newly booked install:
+  //    record the date, add Will's DNSP pre-approval to-do (due before the install), make sure Ethan's stock
+  //    order to-do exists, and email Will a short note of what was added. Other install events are still
+  //    used as a backup source of install dates, as before.
+  if (!s.calCheckedAt || Date.now() - Date.parse(s.calCheckedAt) > 55 * 60000) {
     s.calCheckedAt = new Date().toISOString();
+    s.calSeen = s.calSeen || {};
+    const found = [];
     for (const who of ['will', 'ethan']) {
       await runAs(who, async () => {
         const gs = await googleStatus().catch(() => ({}));
@@ -165,10 +215,30 @@ async function automationsAsWill({ force = false } = {}) {
         const toDay = (x) => x && (x.date || (x.dateTime && new Date(x.dateTime).toLocaleDateString('en-CA', { timeZone: 'Australia/Melbourne' }))) || '';
         for (const e of ev.items || []) {
           if (!/install/i.test(e.summary || '') || e.status === 'cancelled') continue;
-          const day = toDay(e.start); if (day) setInstall(jobs, custOf(e.summary), day, 'calendar');
+          const day = toDay(e.start); if (day) found.push({ id: e.id, summary: e.summary, day });
         }
       }).catch(() => {});
     }
+    if (found.length) {
+      const today = melbToday(0), booked = [];
+      for (const e of found) {
+        const m = !s.calSeen[e.id] && !first && e.day >= today && String(e.summary).match(INSTALL_TITLE);
+        const job = m && signedMatch(signedList, jobs, m[2]);
+        if (job && !(findJob(jobs, job.name, job.projectId) || {}).installDate) {
+          const jb = upsertJob(jobs, { name: job.name, projectId: job.projectId });
+          setInstall(jobs, jb.name, e.day, 'calendar', jb.projectId);
+          booked.push(jb);
+        } else setInstall(jobs, custOf(e.summary), e.day, 'calendar');   // the backup, as before
+        s.calSeen[e.id] = e.day;
+      }
+      if (booked.length) {
+        await saveJobs(jobs);   // keep the dates even if a to-do or the email below fails
+        const notes = [];
+        for (const jb of booked) notes.push(await installBooked(jb, today, added));
+        await installNotice(notes).catch((err) => console.log('install notice failed', err.message));
+      }
+    }
+    const ids = Object.keys(s.calSeen); ids.slice(0, Math.max(0, ids.length - 300)).forEach((k) => delete s.calSeen[k]);
   }
 
   // 2. Reminders from each job's install date:
