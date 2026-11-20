@@ -16,10 +16,10 @@ import { tz, clip, melbToDate, melbToday } from './util.mjs';
 // ---------------- helpers ----------------
 const b64urlDecode = (s) => Buffer.from(String(s || '').replace(/-/g, '+').replace(/_/g, '/'), 'base64');
 const b64url = (buf) => Buffer.from(buf).toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
-const hdr = (m, name) => { const h = ((m.payload && m.payload.headers) || []).find((x) => x.name.toLowerCase() === name.toLowerCase()); return h ? h.value : ''; };
+export const hdr = (m, name) => { const h = ((m.payload && m.payload.headers) || []).find((x) => x.name.toLowerCase() === name.toLowerCase()); return h ? h.value : ''; };
 const strip = (html) => String(html).replace(/<style[\s\S]*?<\/style>|<script[\s\S]*?<\/script>/gi, ' ').replace(/<br\s*\/?>|<\/p>|<\/div>|<\/tr>|<\/li>/gi, '\n').replace(/<[^>]+>/g, ' ')
   .replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&#39;|&rsquo;/g, '’').replace(/&quot;/g, '"').replace(/[ \t]+/g, ' ').replace(/\n\s*\n\s*\n+/g, '\n\n').trim();
-function bodyText(payload) {
+export function bodyText(payload) {
   let plain = '', html = '';
   (function walk(p) {
     if (!p) return;
@@ -29,7 +29,7 @@ function bodyText(payload) {
   })(payload);
   return (plain || strip(html)).trim();
 }
-function attachments(payload) {
+export function attachments(payload) {
   const out = [];
   (function walk(p) { if (!p) return; if (p.filename && p.body && p.body.attachmentId) out.push({ filename: p.filename, mime_type: p.mimeType, size_kb: Math.round((p.body.size || 0) / 1024), attachment_id: p.body.attachmentId }); (p.parts || []).forEach(walk); })(payload);
   return out;
@@ -653,6 +653,17 @@ tool({
     const want = whose === 'everyone' ? null : whose === 'will' || whose === 'ethan' ? whose : me;
     const items = d.items.filter((x) => (include_done || !x.done) && (!want || x.owner === want || x.owner === 'both') && (!low || x.section.toLowerCase().includes(low) || low.includes(x.section.toLowerCase())));
     return { sections: d.sections, items: items.map((x) => ({ id: x.id, section: x.section, text: x.text, for: x.owner, due: x.due || undefined, done: x.done || undefined, ref: x.ref || undefined })) };
+  }
+});
+tool({
+  name: 'invoice_scan', group: 'core',
+  description: 'Check Ethan’s and Will’s inboxes for new supplier invoices and bills now (read-only: no email is sent, archived or changed) and add any new ones to Ethan’s Accounts to-dos, skipping ones already on the list. This already runs automatically early every morning, so only use it when someone asks to check for invoices again now. If the result says more: true, call it again to carry on.',
+  input_schema: { type: 'object', properties: {} },
+  async run() {
+    const { runInvoiceScan } = await import('./invoices.mjs');   // loaded here, as invoices.mjs uses this file's Gmail helpers
+    const r = await runInvoiceScan({ force: true, budgetMs: 7000, batchSize: 4 });
+    // just what the to-dos say: never the subjects or contents of Will's emails
+    return { ...r, added: (r.added || []).map((x) => x.text) };
   }
 });
 tool({
