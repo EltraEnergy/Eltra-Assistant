@@ -13,7 +13,7 @@ permissions:
   id-token: write
 jobs:
   claude:
-    if: contains(github.event.issue.body, '@claude') || contains(github.event.comment.body, '@claude')
+    if: (contains(github.event.issue.body, '@claude') || contains(github.event.comment.body, '@claude')) && github.actor != 'claude[bot]'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
