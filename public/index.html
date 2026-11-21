@@ -384,7 +384,22 @@
   .pdb ul { margin: 0; padding-left: 18px; } .pdb pre { white-space: pre-wrap; font: inherit; margin: 0; background: var(--paper); border-radius: 10px; padding: 10px; }
   .pdf { display: flex; flex-wrap: wrap; gap: 8px; justify-content: flex-end; padding: 12px 18px; border-top: 1px solid var(--line); }
   /* improvements */
-  .imp { border-top: 1px solid var(--line); padding: 12px 0; display: grid; gap: 6px; }
+  .imp { border-top: 1px solid var(--line); padding: 6px 0; display: grid; gap: 6px; }
+  .imp.past { opacity: .75; }
+  .imp .line { display: flex; gap: 8px; align-items: center; min-height: 36px; cursor: pointer; }
+  .imp .tt { flex: 1; min-width: 0; display: flex; gap: 6px; align-items: center; background: none; border: 0; padding: 4px 0; font: inherit; color: var(--ink); text-align: left; cursor: pointer; }
+  .imp .tt b { font-size: 15px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .imp .car, .imptog .car { display: inline-block; font-size: 11px; color: var(--muted); transition: transform .15s; flex: none; }
+  .imp.open .car, .imptog[aria-expanded="true"] .car { transform: rotate(90deg); }
+  .imp .st { flex: none; font-size: 12px; font-weight: 700; border-radius: 999px; padding: 2px 8px; background: var(--paper); color: var(--muted); white-space: nowrap; }
+  .imp .st-proposed { background: var(--amber-soft); color: var(--amber); } .imp .st-building, .imp .st-approved { background: #E3EEFB; color: var(--blue-deep); } .imp .st-built { background: var(--green-soft); color: var(--green); } .imp .st-failed { background: var(--red-soft); color: var(--red); }
+  .imp .qa { display: flex; gap: 6px; flex: none; } .imp .qa:empty { display: none; }
+  .imp .more { display: grid; gap: 6px; padding: 0 0 8px 17px; }
+  .btn.sm { min-height: 32px; padding: 3px 12px; font-size: 13.5px; border-radius: 8px; }
+  .imptog { display: inline-flex; gap: 8px; align-items: center; background: none; border: 0; padding: 0; font: inherit; color: inherit; cursor: pointer; text-align: left; }
+  .imptog .impn { font-size: 13px; font-weight: 700; color: var(--muted); background: var(--paper); border-radius: 999px; padding: 2px 9px; }
+  .impdone { display: inline-flex; gap: 4px; align-items: center; cursor: pointer; white-space: nowrap; }
+  .imp-none { color: var(--dim); font-size: 14px; margin: 10px 0 4px; }
   .imp .t { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; } .imp .t b { font-size: 15.5px; }
   .imp .k { font-size: 12px; font-weight: 700; border-radius: 999px; padding: 2px 8px; background: var(--paper); color: var(--muted); }
   .imp .why { color: var(--muted); font-size: 14px; } .imp .chg { font-size: 14px; background: var(--paper); border-radius: 8px; padding: 8px 10px; white-space: pre-wrap; }
@@ -482,8 +497,8 @@
     </div>
   </section>
   <section class="hud improve" aria-labelledby="impH" id="impPanel" hidden>
-    <div class="hh"><h2 id="impH">Eltra’s improvement ideas</h2><small id="impCount"></small></div>
-    <div class="hb"><div id="impList"></div></div>
+    <div class="hh"><h2 id="impH"><button type="button" class="imptog" id="impToggle" aria-expanded="true" aria-controls="impBody"><span class="car" aria-hidden="true">▸</span>Eltra’s improvement ideas <span class="impn" id="impCount"></span></button></h2><small><span id="impLearnedCount"></span><label class="impdone"><input type="checkbox" id="impShowDone"> Show completed</label></small></div>
+    <div class="hb" id="impBody"><div id="impList"></div></div>
   </section>
   <div class="cols">
     <section class="hud" aria-labelledby="calH">

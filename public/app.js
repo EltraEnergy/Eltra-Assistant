@@ -1027,36 +1027,53 @@
   function loadImprove() { return api('improve').then(renderImprove).catch(function () {}); }
   var impPoll = null, IMP = { items: [], canBuild: {} };
   var APPNAME = { eltra: 'Eltra', quote: 'Quote app' };
+  var IMP_ACTIVE = ['proposed', 'approved', 'building', 'built', 'failed'];
+  var IMP_STATUS = { proposed: 'Waiting for approval', approved: 'Approved · to build', building: 'Building', built: 'Ready to test', failed: 'Didn’t build', live: 'Live', undone: 'Undone', rejected: 'Declined' };
+  var impOpen = {}, impShowDone = false, impCollapsed = load('eltra-imp-collapsed', false);
+  function impSetCollapsed(v) { impCollapsed = v; save('eltra-imp-collapsed', v); $('impBody').hidden = v; $('impToggle').setAttribute('aria-expanded', v ? 'false' : 'true'); }
+  $('impToggle').onclick = function () { impSetCollapsed(!impCollapsed); };
+  $('impShowDone').checked = false;
+  $('impShowDone').onchange = function () { impShowDone = $('impShowDone').checked; renderImprove(); };
+  impSetCollapsed(impCollapsed);
   function renderImprove(d) {
     IMP = d || IMP;
-    var recent = function (x) { return Date.now() - Date.parse(x.build && (x.build.liveAt || x.build.undoneAt) || x.decidedAt || x.createdAt || 0) < 7 * 864e5; };
-    var items = (IMP.items || []).filter(function (x) { return ['proposed', 'approved', 'building', 'built', 'failed'].indexOf(x.status) >= 0 || (x.build && ['live', 'undone'].indexOf(x.status) >= 0 && recent(x)); });
+    var all = IMP.items || [];
+    var active = all.filter(function (x) { return IMP_ACTIVE.indexOf(x.status) >= 0; });
+    var done = all.filter(function (x) { return IMP_ACTIVE.indexOf(x.status) < 0; })
+      .sort(function (a, b) { return Date.parse(b.build && (b.build.liveAt || b.build.undoneAt) || b.decidedAt || b.createdAt || 0) - Date.parse(a.build && (a.build.liveAt || a.build.undoneAt) || a.decidedAt || a.createdAt || 0); });
+    var items = impShowDone ? active.concat(done) : active;
     var box = $('impList'); box.textContent = '';
-    var learned = (IMP.items || []).filter(function (x) { return x.kind === 'behaviour' && x.status === 'live'; });
-    $('impPanel').hidden = !items.length && !learned.length;
-    $('impCount').textContent = items.filter(function (x) { return x.status === 'proposed'; }).length + ' waiting · ' + learned.length + ' learned';
+    var learned = all.filter(function (x) { return x.kind === 'behaviour' && x.status === 'live'; });
+    $('impPanel').hidden = !all.length;
+    $('impCount').textContent = active.length + ' pending';
+    $('impLearnedCount').textContent = learned.length ? learned.length + ' learned' : '';
     if (learned.length) {
       var lh = document.createElement('details'); lh.className = 'learned';
       lh.innerHTML = '<summary>What Eltra has learned (' + learned.length + ')</summary>' + learned.map(function (x) { return '<div class="lrow"><span>' + esc(x.change) + '</span><button type="button" class="copy" data-unlearn="' + esc(x.id) + '">Remove</button></div>'; }).join('');
       lh.querySelectorAll('[data-unlearn]').forEach(function (b) { b.onclick = function () { if (confirm('Stop following this rule?')) decideImp(b.dataset.unlearn, 'reject'); }; });
       box.appendChild(lh);
     }
+    if (!items.length) { var none = document.createElement('p'); none.className = 'imp-none'; none.textContent = done.length ? 'Nothing waiting. Tick “Show completed” to see past ideas.' : 'Nothing waiting.'; box.appendChild(none); }
     items.forEach(function (it) {
       var b = it.build || {}, feature = it.kind !== 'behaviour', tgt = it.target || 'eltra', can = IMP.canBuild && IMP.canBuild[tgt];
-      var el = document.createElement('div'); el.className = 'imp';
-      var head = '<div class="t"><b>' + esc(it.title) + '</b><span class="k">' + (feature ? 'New feature · ' + APPNAME[tgt] : 'How Eltra works · goes live on approval') + '</span></div>';
+      var el = document.createElement('div'); el.className = 'imp' + (impOpen[it.id] ? ' open' : '') + (IMP_ACTIVE.indexOf(it.status) < 0 ? ' past' : '');
+      var line = '<div class="line"><button type="button" class="tt" aria-expanded="' + (impOpen[it.id] ? 'true' : 'false') + '"><span class="car" aria-hidden="true">▸</span><b>' + esc(it.title) + '</b></button><span class="st st-' + esc(it.status) + '">' + esc(IMP_STATUS[it.status] || it.status) + '</span><span class="qa"></span></div>';
+      var head = '<div class="t"><span class="k">' + (feature ? 'New feature · ' + APPNAME[tgt] : 'How Eltra works · goes live on approval') + '</span></div>';
       var body = '';
-      if (it.status === 'proposed' || it.status === 'approved') body = '<div class="why">' + esc(it.why) + '</div><div class="chg">' + esc(it.change) + '</div>';
+      if (['proposed', 'approved', 'rejected'].indexOf(it.status) >= 0 || (it.status === 'live' && !b.liveAt)) body = '<div class="why">' + esc(it.why) + '</div><div class="chg">' + esc(it.change) + '</div>';
       if (it.status === 'building') body = '<div class="bstat">⏳ Claude is building it in ' + APPNAME[tgt] + '’s code. Usually 2 to 10 minutes; the preview appears here when it’s ready. ' + (b.issueUrl ? '<a href="' + esc(b.issueUrl) + '" target="_blank" rel="noopener">See it on GitHub</a>' : '') + '</div>';
       if (it.status === 'built') body = '<div class="bstat ok">✅ Built. Try the preview, then make it live.</div>' + (b.summary ? '<details class="sum"><summary>What Claude changed</summary><pre>' + esc(b.summary) + '</pre></details>' : '');
       if (it.status === 'failed') body = '<div class="bstat err">Didn’t build: ' + esc(b.error || b.lastError || 'unknown problem') + (b.issueUrl ? ' <a href="' + esc(b.issueUrl) + '" target="_blank" rel="noopener">Open on GitHub</a>' : '') + '</div>';
-      if (it.status === 'live') body = '<div class="bstat ok">Live since ' + esc(new Date(b.liveAt).toLocaleString('en-AU', { timeZone: TZ, weekday: 'short', hour: 'numeric', minute: '2-digit' })) + '.' + (b.prUrl ? ' <a href="' + esc(b.prUrl) + '" target="_blank" rel="noopener">The change on GitHub</a>' : '') + '</div>';
+      if (it.status === 'live' && b.liveAt) body = '<div class="bstat ok">Live since ' + esc(new Date(b.liveAt).toLocaleString('en-AU', { timeZone: TZ, weekday: 'short', hour: 'numeric', minute: '2-digit' })) + '.' + (b.prUrl ? ' <a href="' + esc(b.prUrl) + '" target="_blank" rel="noopener">The change on GitHub</a>' : '') + '</div>';
       if (it.status === 'undone') body = '<div class="bstat">Undone: the previous version is live again' + (b.revertIssue ? ', and Claude is reverting the code (<a href="' + esc(b.revertIssue) + '" target="_blank" rel="noopener">GitHub</a>)' : '') + '.</div>';
-      el.innerHTML = head + body + '<div class="row"></div>';
-      var row = el.querySelector('.row'), add = function (label, cls, fn) { var x = document.createElement('button'); x.type = 'button'; x.className = 'btn' + (cls ? ' ' + cls : ''); x.textContent = label; x.onclick = fn; row.appendChild(x); return x; };
+      el.innerHTML = line + '<div class="more"' + (impOpen[it.id] ? '' : ' hidden') + '>' + head + body + '<div class="row"></div></div>';
+      var more = el.querySelector('.more'), tt = el.querySelector('.tt');
+      el.querySelector('.line').onclick = function (ev) { if (ev.target.closest('.qa')) return; impOpen[it.id] = !impOpen[it.id]; more.hidden = !impOpen[it.id]; el.classList.toggle('open', !!impOpen[it.id]); tt.setAttribute('aria-expanded', impOpen[it.id] ? 'true' : 'false'); };
+      var row = el.querySelector('.row'), add = function (label, cls, fn, into) { var x = document.createElement('button'); x.type = 'button'; x.className = 'btn' + (cls ? ' ' + cls : ''); x.textContent = label; x.onclick = fn; (into || row).appendChild(x); return x; };
       if (it.status === 'proposed') {
-        add(feature && can ? 'Approve & build' : 'Approve', '', function (e) { approveImp(it, e.target); });
-        add('Not now', 'no', function () { decideImp(it.id, 'reject'); });
+        var qa = el.querySelector('.qa');
+        add('Approve', 'sm', function (e) { approveImp(it, e.target); }, qa).title = feature && can ? 'Approve and start building' : 'Approve';
+        add('Decline', 'sm no', function () { decideImp(it.id, 'reject'); }, qa);
         if (feature) add('For: ' + APPNAME[tgt] + ' ⇄', 'no', function () { impCall({ id: it.id, action: 'target', target: tgt === 'eltra' ? 'quote' : 'eltra' }); });
       } else if (it.status === 'approved') {
         add('Copy build brief', '', function (ev) { var t = 'Eltra improvement to build (approved): ' + it.title + '\nWhy: ' + it.why + '\n\n' + it.change; (navigator.clipboard ? navigator.clipboard.writeText(t) : Promise.reject()).catch(function () { fallbackCopy(t); }).then(function () { ev.target.textContent = 'Copied ✓'; }); });
@@ -1078,7 +1095,7 @@
       box.appendChild(el);
     });
     // while something is building, keep checking every minute
-    var busyNow = items.some(function (x) { return x.status === 'building'; });
+    var busyNow = active.some(function (x) { return x.status === 'building'; });
     if (busyNow && !impPoll) impPoll = setInterval(loadImprove, 60000);
     if (!busyNow && impPoll) { clearInterval(impPoll); impPoll = null; }
   }
