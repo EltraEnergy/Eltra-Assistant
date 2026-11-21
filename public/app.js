@@ -525,23 +525,110 @@
   var canRecord = !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia && window.MediaRecorder);
   var stream = null, recorder = null, chunks = [], listening = false, vad = null, ac = null, cancelRec = false, forceSend = false;
   function mimeType() { var t = ['audio/webm;codecs=opus', 'audio/webm', 'audio/mp4', 'audio/ogg']; for (var i = 0; i < t.length; i++) if (MediaRecorder.isTypeSupported && MediaRecorder.isTypeSupported(t[i])) return t[i]; return ''; }
-  function stopListening(cancel, manual) { cancelRec = !!cancel; forceSend = !!manual; if (recorder && recorder.state !== 'inactive') recorder.stop(); }
-  var followUp = false, noSpeech = false;
+  function stopListening(cancel, manual) {
+    cancelRec = !!cancel; forceSend = !!manual;
+    if (recorder && recorder.state !== 'inactive') recorder.stop();
+    if (srRec) { srStopped = true; try { if (cancel) srRec.abort(); else srRec.stop(); } catch (e) {} }
+  }
+  var followUp = false, noSpeech = false, starting = false, dropReason = null, autoTry = false;
+  // ---- mic health: iPhone Home Screen apps lose the mic when backgrounded or locked, so watch for it and say so ----
+  var isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+  function iosStandalone() { return isIOS && (navigator.standalone === true || !!(window.matchMedia && matchMedia('(display-mode: standalone)').matches)); }
+  var micBlocked = false, resumeMic = false, micPerm = null, micInfo = load('eltra-mic', {});
+  function micHint(t) { $('vHint').textContent = t; }
+  // a dead or muted stream (iOS kills it in the background) has to be asked for again
+  function liveStream() { return !!stream && stream.getAudioTracks().some(function (t) { return t.readyState === 'live' && !t.muted; }); }
+  function releaseStream() {
+    if (!stream) return;
+    stream.getTracks().forEach(function (t) { t.onended = t.onmute = t.onunmute = null; try { t.stop(); } catch (e) {} });
+    stream = null;
+  }
+  function micOff(msg) { setState('off', 'Mic off, tap to restart'); micHint(msg || 'Listening stopped unexpectedly. Tap the mic to start again.'); }
+  function micDenied() {
+    micBlocked = true; noteLoss();
+    setState('denied', 'Mic blocked');
+    micHint(isIOS ? 'Microphone access is off. Go to Settings, Safari, Microphone, choose Allow, then tap the mic. You can still type.'
+      : 'Microphone access is blocked. Allow it for this site in your browser settings (by the address bar), then tap the mic. You can still type.');
+  }
+  // Plain-language messages for everything the mic or speech recognition can report.
+  function micError(code) {
+    var auto = autoTry; autoTry = false;
+    if (busy) return;
+    if (code === 'not-allowed' || code === 'NotAllowedError' || code === 'SecurityError' || code === 'PermissionDeniedError' || code === 'denied') {
+      // iOS can refuse a restart that wasn't started by a tap; that isn't a blocked mic, so just ask for a tap
+      if (auto && code !== 'denied' && !(micPerm && micPerm.state === 'denied')) return micOff('Tap the mic to pick up where you left off.');
+      return micDenied();
+    }
+    if (code === 'no-speech') { setState('idle', 'Didn’t hear anything'); micHint('I didn’t hear anything. Tap the mic and try again, a little closer.'); return; }
+    if (code === 'ended') noteLoss();
+    micOff({
+      'audio-capture': 'Couldn’t reach the microphone. Another app (a call, Siri or a recording) may be using it. Tap the mic to try again.',
+      NotFoundError: 'No microphone found. Check one is connected, then tap the mic.',
+      NotReadableError: 'Couldn’t reach the microphone. Another app (a call, Siri or a recording) may be using it. Tap the mic to try again.',
+      network: 'Voice recognition needs an internet connection. Check your signal, then tap the mic.',
+      'service-not-allowed': 'Speech recognition is turned off on this device. Turn on Siri & Dictation in Settings, or use the keyboard mic.',
+      'language-not-supported': 'This device can’t recognise Australian English speech. Use the keyboard mic instead.',
+      aborted: 'Listening was interrupted. Tap the mic to start again.',
+      hidden: 'Listening paused while Eltra was in the background. Tap the mic to start again.',
+      ended: 'The microphone dropped out. Tap the mic to start again.',
+      silent: 'The microphone isn’t sending any sound. Tap the mic to restart it.'
+    }[code]);
+  }
+  // Count mic losses in the Home Screen app; if it keeps happening, show a one-time tip on how to fix it for good.
+  function noteLoss() {
+    if (!iosStandalone()) return;
+    micInfo.losses = (micInfo.losses || 0) + 1; save('eltra-mic', micInfo);
+    if (micInfo.losses >= 2 && !micInfo.tipped) {
+      micInfo.tipped = true; save('eltra-mic', micInfo);
+      var t = $('voiceToast'); t.textContent = 'Tip: the Home Screen app keeps losing the microphone. Open Eltra in Safari and allow the mic there, then go to Settings, Safari, Microphone and choose Allow. Tap to close.';
+      t.hidden = false; t.style.cursor = 'pointer'; t.onclick = function () { t.hidden = true; t.onclick = null; t.style.cursor = ''; };
+      clearTimeout(noticeT); noticeT = setTimeout(function () { t.hidden = true; }, 20000);
+    }
+  }
+  function checkMicPermission() {
+    try {
+      return navigator.permissions.query({ name: 'microphone' }).then(function (p) {
+        if (!micPerm) { micPerm = p; p.onchange = function () { permChanged(p.state); }; }
+        if (p.state === 'prompt' && micInfo.granted && iosStandalone()) { micInfo.granted = false; save('eltra-mic', micInfo); noteLoss(); }   // permission was reset
+        return p.state;
+      }).catch(function () { return 'unknown'; });
+    } catch (e) { return Promise.resolve('unknown'); }
+  }
+  function permChanged(st) {
+    if (st === 'denied') { if (listening || srRec) { dropReason = 'denied'; stopListening(true); } else if (!busy) micDenied(); releaseStream(); return; }
+    if (st === 'granted') micBlocked = false;
+    if (orb.dataset.state === 'denied' && !busy) { setState('idle', 'Ready'); wakeHint(); }
+  }
   function startListening(isFollowUp) {
-    if (listening || busy) return;
-    followUp = isFollowUp === true;
+    if (listening || busy || starting) return;
+    if (isFollowUp === true && micBlocked) return;   // don't keep re-asking after every reply while the mic is blocked
+    followUp = isFollowUp === true; autoTry = isFollowUp === 'auto'; dropReason = null;
     wakeStop();
     hush(); unlockAudio();
     if (!canRecord || !(voices && voices.configured)) return startFallback();
     cancelRec = false;
+    if (stream && !liveStream()) releaseStream();
+    starting = true;
     var go = stream ? Promise.resolve(stream) : navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
     go.then(function (s) {
-      stream = s; chunks = [];
+      starting = false; stream = s; autoTry = false;
+      if (busy || document.hidden) { if (document.hidden) { resumeMic = true; if (isIOS) releaseStream(); } return; }
+      chunks = [];
+      micBlocked = false; if (!micInfo.granted) { micInfo.granted = true; save('eltra-mic', micInfo); }
+      // the mic track ending or going mute mid-recording (call, Siri, screen lock) is a drop-out, not silence
+      var muteT = null;
+      s.getAudioTracks().forEach(function (t) {
+        t.onended = function () { if (listening && stream === s) { dropReason = 'ended'; stopListening(true); } if (stream === s) releaseStream(); };
+        t.onmute = function () { clearTimeout(muteT); muteT = setTimeout(function () { if (t.muted && listening && stream === s) { dropReason = 'ended'; stopListening(true); releaseStream(); } }, 1200); };
+        t.onunmute = function () { clearTimeout(muteT); };
+      });
       var mt = mimeType(); recorder = new MediaRecorder(s, mt ? { mimeType: mt } : undefined);
       recorder.ondataavailable = function (e) { if (e.data && e.data.size) chunks.push(e.data); };
+      recorder.onerror = function () { if (listening) { dropReason = 'audio-capture'; stopListening(true); } };
       recorder.onstop = function () {
-        listening = false; clearInterval(vad); orb.style.removeProperty('--lvl');
+        listening = false; clearInterval(vad); clearTimeout(muteT); orb.style.removeProperty('--lvl');
         var blob = new Blob(chunks, { type: (recorder.mimeType || 'audio/webm').split(';')[0] });
+        if (dropReason) { var why = dropReason; dropReason = null; noSpeech = false; releaseStream(); micError(why); return; }
         if (noSpeech && !followUp) { noSpeech = false; setState('idle', 'Didn’t hear anything'); $('vHint').textContent = 'I didn’t hear anything. Tap the mic and try again, a little closer.'; return; }
         noSpeech = false;
         if (cancelRec || !(heard || forceSend) || blob.size < 1500) { setState('idle', 'Ready'); return; }
@@ -552,16 +639,18 @@
       };
       // simple voice activity detection: wait for speech, then stop after ~1.4 s of quiet
       if (!ac) ac = new (window.AudioContext || window.webkitAudioContext)();
-      if (ac.state === 'suspended') ac.resume();
+      if (ac.state !== 'running') { try { ac.resume().catch(function () {}); } catch (e) {} }   // iOS leaves it 'suspended' or 'interrupted' after the background
       var src = ac.createMediaStreamSource(s), an = ac.createAnalyser(); an.fftSize = 1024; src.connect(an);
       // Speech detection that adapts to the room: it learns the background level and listens for anything clearly above it.
       // Float samples (not 8-bit) so quiet voices at a distance still register. Sensitivity is set in Settings.
-      var buf = new Float32Array(an.fftSize), heard = false, quietSince = 0, startAt = Date.now(), noise = 0, peak = 0;
+      var buf = new Float32Array(an.fftSize), heard = false, quietSince = 0, startAt = Date.now(), noise = 0, peak = 0, deadSince = 0;
       var sens = { normal: 1, high: 0.7, max: 0.5 }[vs.sens || 'high'] || 0.7;
       vad = setInterval(function () {
         an.getFloatTimeDomainData(buf); var sum = 0; for (var i = 0; i < buf.length; i++) sum += buf[i] * buf[i];
         var rms = Math.sqrt(sum / buf.length), now = Date.now();
         orb.style.setProperty('--lvl', Math.min(14, rms * 160).toFixed(1) + 'px');
+        // a real mic always has some hiss: a few seconds of perfect zero means the mic has dropped out, not that the room is quiet
+        if (rms === 0 || ac.state !== 'running') { if (!deadSince) deadSince = now; if (!heard && now - deadSince > 3000) { dropReason = 'silent'; stopListening(true); return; } } else deadSince = 0;
         if (now - startAt < 250) { noise = noise ? Math.min(noise, rms) : rms; return; }   // background, taken from the quietest moment
         var gate = Math.max(0.006, Math.min(noise, 0.03) * 2.4) * sens;
         peak = Math.max(peak, rms);
@@ -577,19 +666,33 @@
         if (now - startAt > 45000) stopListening(false);
       }, 80);
       recorder.start(250); listening = true; setState('listening', 'Listening');
-    }).catch(function (e) { canRecord = false; $('vHint').textContent = 'Microphone blocked. Allow it in your browser settings, or use the keyboard mic.'; startFallback(); });
+    }).catch(function (e) {
+      starting = false; var n = e && e.name;
+      if (n === 'NotAllowedError' || n === 'SecurityError' || n === 'PermissionDeniedError') { micError(n); return; }   // blocked: say how to fix it, try again on the next tap
+      if (n === 'NotFoundError' || n === 'NotReadableError' || n === 'AbortError') { micError(n === 'NotFoundError' ? n : 'NotReadableError'); return; }
+      canRecord = false; micHint('Recording isn’t available here, so using speech recognition or the keyboard mic.'); startFallback();
+    });
   }
   // fallback 1: browser speech recognition; fallback 2: keyboard dictation with auto-send
-  var SR = window.SpeechRecognition || window.webkitSpeechRecognition, armed = false, quiet = null;
+  var SR = window.SpeechRecognition || window.webkitSpeechRecognition, armed = false, quiet = null, srRec = null, srStopped = false;
   function startFallback() {
     if (SR) {
       try {
-        var rec = new SR(), text = ''; rec.lang = 'en-AU'; rec.interimResults = true;
+        var rec = new SR(), text = '', err = null; rec.lang = 'en-AU'; rec.interimResults = true;
         rec.onresult = function (e) { text = ''; for (var i = 0; i < e.results.length; i++) text += e.results[i][0].transcript; $('askIn').value = text; };
-        rec.onerror = function () { SR = null; };
-        rec.onend = function () { listening = false; if (busy) return; setState('idle', 'Ready'); if (text.trim()) ask(text); };
-        rec.start(); listening = true; setState('listening', 'Listening'); return;
-      } catch (e) { SR = null; }
+        // only give up on speech recognition for good when the device can't do it; a blocked mic or a dropout can be retried
+        rec.onerror = function (e) { err = (e && e.error) || 'aborted'; if (err === 'service-not-allowed' || err === 'language-not-supported') SR = null; };
+        rec.onend = function () {
+          if (srRec !== rec) return;
+          srRec = null; listening = false; if (busy) return;
+          var why = dropReason; dropReason = null;
+          if (text.trim() && !why) { setState('idle', 'Ready'); ask(text); return; }
+          if (why) { micError(why); return; }
+          if (srStopped) { setState('idle', 'Ready'); return; }
+          micError(err || 'no-speech');   // ended on its own without hearing anything: say so instead of going quiet
+        };
+        srStopped = false; srRec = rec; rec.start(); listening = true; setState('listening', 'Listening'); return;
+      } catch (e) { srRec = null; SR = null; }
     }
     $('askIn').value = ''; $('askIn').focus(); armed = true; setState('listening', 'Dictate now');
     $('vHint').textContent = 'Use the mic key on your keyboard. It sends when you stop.';
@@ -599,6 +702,24 @@
   $('askIn').addEventListener('blur', function () { clearTimeout(quiet); armed = false; if (!busy && orb.dataset.state === 'listening' && !listening) setState('idle', 'Ready'); });
   orb.onclick = function () { unlockAudio(); if (busy) return; if (speaking) { hush(); setState('idle', 'Ready'); return; } if (listening) { stopListening(false, true); return; } startListening(false); };
   document.addEventListener('keydown', function (e) { if (e.code === 'Space' && e.target === document.body) { e.preventDefault(); orb.click(); } });
+  // Screen lock / app switch: stop cleanly and remember it was on. Back in the foreground: re-check permission and pick up again.
+  function micAway() {
+    if (listening || srRec || starting) { resumeMic = true; dropReason = 'hidden'; stopListening(true); }
+    if (isIOS) releaseStream();   // iOS kills the mic in the background anyway; a fresh one is asked for on return
+  }
+  function micBack() {
+    checkMicPermission().then(function (st) {
+      if (document.hidden) return;
+      if (st === 'denied') { resumeMic = false; if (!busy && !listening) micDenied(); return; }
+      if (st === 'granted') micBlocked = false;
+      if (orb.dataset.state === 'denied' && st === 'granted' && !busy) { setState('idle', 'Ready'); wakeHint(); }
+      if (resumeMic) { resumeMic = false; setTimeout(function () { if (!busy && !speaking && !listening && !document.hidden) startListening('auto'); }, 400); }
+    });
+  }
+  document.addEventListener('visibilitychange', function () { if (document.hidden) micAway(); else micBack(); });
+  window.addEventListener('pagehide', micAway);
+  window.addEventListener('pageshow', function (e) { if (e.persisted && !document.hidden) micBack(); });
+  checkMicPermission().then(function (st) { if (st === 'denied' && !busy) micDenied(); });
 
   // ================= wake word: say "Eltra" =================
   // Uses the browser's own speech recognition to listen for the name while the page is open (Chrome, Edge, Safari).
