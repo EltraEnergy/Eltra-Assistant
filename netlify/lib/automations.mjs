@@ -3,12 +3,13 @@
 //  • a proposal has sat unsigned for 3+ days → a follow-up to-do (once per project)
 //  • a proposal or signed design includes Solar Victoria (battery rebate or interest-free loan) → a "Lodge Solar Victoria application" to-do (once per project)
 //  • an "Install - name" event appears in the calendar for a signed job → install date, DNSP pre-approval and stock to-dos, and a note to Will
+//  • a site appointment in Will's calendar has finished → a "Send Pylon proposal to …" Quoting to-do (ticked off once it's sent)
 //  • every Monday morning → "Do payroll", every Saturday morning → "Do ServiceM8" (Ethan, Accounts, due that day)
 // Runs on a schedule (functions/automations.mjs) and whenever the dashboard loads the to-do list (at most every 15 min).
 import { store, runAs, melbToday } from './util.mjs';
 import { addTodo, loadTodos, updateTodo } from './todos.mjs';
-import { pylon, pylonReady, pylonProject, pylonDesign, DESIGN_FIELDS, toolByName } from './tools.mjs';
-import { googleStatus, g, CAL } from './google.mjs';
+import { pylon, pylonReady, pylonProject, pylonDesign, DESIGN_FIELDS, toolByName, invitee } from './tools.mjs';
+import { googleStatus, g, CAL, GMAIL } from './google.mjs';
 import { claudeJSON } from './claude.mjs';
 import { sendWeeklySummaries, sendTo } from './weekly.mjs';
 import { loadJobs, saveJobs, upsertJob, setInstall, findJob, normName } from './jobs.mjs';
@@ -150,6 +151,111 @@ async function installNotice(notes) {
   await sendTo(gs.email, { subject, html, text });
 }
 
+// ---- Site appointments → "Send Pylon proposal" to-do ----
+// Once a site appointment in Will's calendar has finished, add one Quoting to-do for Will, due the day of the visit:
+// "Send Pylon proposal to <name> (<address>)". A site appointment is a timed event whose title or description says
+// site visit / appointment / assessment / consult / quote (GoHighLevel bookings included), or one titled with just a
+// customer name and a street address as its location. Installs, inspections, service jobs, phone or video calls and
+// personal events are skipped. No doubles, and none if that customer's Pylon job is already signed or a proposal was
+// made on or after the visit. Open ones are ticked off once the proposal has gone out (see siteProposalSent).
+const SITE_WORDS = /\bsite\b|appointment|assessment|consult|\bquote|\bsales\b/i;
+const NOT_SITE = /\binstall|\bcommission|\binspect|\bservice|\bmaintenance|\brepair|\bwarranty|\bphone\b|\bcalls?\b|\bzoom\b|\bteams\b|\bmeet\b|\bwebinar|\bbirthday|\banniversary|\bdentist|\bdoctor|\bphysio|\bgym\b|\bdinner|\blunch|\bbreakfast|\bdrinks\b|\bschool|\bholiday|\bleave\b|\bpersonal\b|\bprivate\b|\bpick ?up\b|\bdrop ?off\b|\bfooty\b|\bwedding|\bhaircut|\bdelivery\b|\bpickup\b|\bdeposit\b|\bvet\b|\bhair|\bnails\b|\bmassage|\boptometrist|\bmechanic|\brego\b|\bcar\b/i;
+const STREET = /\d+[a-z]?\s+[a-z' ]+\b(st|street|rd|road|ave|avenue|ct|court|cres|crescent|dr|drive|pde|parade|pl|place|way|lane|ln|bvd|blvd|boulevard|hwy|highway|cl|close|tce|terrace|gr|grove|cct|circuit|sq|square|rise|walk|track|trk)\b/i;
+const looksAddress = (t) => !!t && !/^https?:/i.test(t) && STREET.test(t);
+const SITE_FILLER = /\b(eltra|energy|solar|battery|batteries|site|visit|appointment|assessment|consult(ation)?|quote|quoting|sales|meeting|onsite|on|with|for|at|and|the|a|new|lead)\b/gi;
+const cleanName = (t) => String(t || '').replace(SITE_FILLER, ' ').replace(/[-–—|:()[\]/,]/g, ' ').replace(/\s+/g, ' ').trim();
+const isName = (t) => /^\p{L}[\p{L}'. -]{1,58}[\p{L}.]$/u.test(t);
+// { name, address, email } when the event is a site appointment with a customer, otherwise null
+function siteAppointment(e) {
+  const title = String(e.summary || '').trim(), desc = String(e.description || '');
+  if (!title || e.status === 'cancelled' || !(e.start && e.start.dateTime && e.end && e.end.dateTime)) return null;   // all-day events are installs or personal
+  if (e.eventType && e.eventType !== 'default') return null;                                                        // out of office, focus time, working location
+  if ((e.attendees || []).some((a) => a.self && a.responseStatus === 'declined')) return null;
+  if (NOT_SITE.test(title)) return null;
+  const who = invitee(desc);
+  const parts = title.split(/\s+[-–—|:]\s+|[–—|:]/).map((x) => x.trim()).filter(Boolean);
+  const address = (looksAddress(e.location) && e.location) || (who && who.address) || parts.find(looksAddress) || '';
+  const site = SITE_WORDS.test(title) || /appointment details|site visit|site assessment/i.test(desc) || !!who;
+  let name = (who && who.name) || cleanName(parts.find((x) => !SITE_WORDS.test(x) && !looksAddress(x) && isName(cleanName(x))) || '') || cleanName(parts.filter((x) => !looksAddress(x)).join(' '));
+  if (!isName(name)) return null;
+  if (!who && !/\bsite\b/i.test(title + ' ' + desc) && name.split(' ').length < 2) return null;   // "Vet appointment" is not a customer
+  if (!site && !(address && name.split(' ').length >= 2 && name.split(' ').length <= 4)) return null;   // "Sarah Smith" at "12 Smith St, …"
+  return { name: name.replace(/\s+/g, ' '), address: String(address).replace(/,?\s*(australia|aus)\s*$/i, '').trim(), email: (who && who.email) || '' };
+}
+// the customer's Pylon project: exact name first, then one clear loose name match, then the street address
+function pylonFor(projects, name, address) {
+  const w = normName(name), list = (projects || []).map((raw) => ({ raw, p: pylonProject(raw) })).filter((x) => x.p.customer && x.p.customer.name);
+  const exact = list.find((x) => normName(x.p.customer.name) === w); if (exact) return exact;
+  const loose = list.filter((x) => { const n = normName(x.p.customer.name); return n.length >= 3 && w.length >= 3 && (w.includes(n) || n.includes(w)); });
+  if (loose.length === 1) return loose[0];
+  const street = normName(String(address || '').split(',')[0]);
+  const byAddr = street.length >= 6 ? list.filter((x) => normName(x.p.address).startsWith(street)) : [];
+  return byAddr.length === 1 ? byAddr[0] : null;
+}
+// has the proposal gone out since the visit? Pylon: job signed, or a proposal (primary design) made on or after the visit
+// day. Gmail: Will has sent the customer an email about their proposal or quote since the visit.
+async function siteProposalSent(s, ctx, m) {
+  const hit = pylonFor(ctx.projects, m.customer, m.address);
+  if (hit) {
+    if (hit.p.sold) return 'signed in Pylon';
+    const id = hit.p.primary_design_id;
+    if (id && (hit.raw.attributes || {}).is_committed) {
+      if (!s.site.designAt[id] && ctx.fetches < 4 && Date.now() < ctx.deadline) {
+        ctx.fetches++;
+        const d = await pylon('/solar_designs/' + encodeURIComponent(id) + '?fields[solar_designs]=created_at').catch(() => null);
+        const at = d && d.data && d.data.attributes && d.data.attributes.created_at;
+        if (at) s.site.designAt[id] = new Date(at).toLocaleDateString('en-CA', { timeZone: 'Australia/Melbourne' });
+      }
+      if (s.site.designAt[id] && s.site.designAt[id] >= m.day) return 'proposal made in Pylon';
+    }
+  }
+  if (ctx.gmail && ctx.searches < 4 && Date.now() < ctx.deadline) {
+    ctx.searches++;
+    const q = 'in:sent after:' + m.day.replace(/-/g, '/') + ' (proposal OR quote OR pylon) ' + (m.email ? 'to:' + m.email : '"' + m.customer.replace(/"/g, '') + '"');
+    const r = await g(GMAIL + '/messages?maxResults=1&q=' + encodeURIComponent(q)).catch(() => null);
+    if (r && r.messages && r.messages.length) return 'proposal emailed';
+  }
+  return '';
+}
+async function siteAppointmentTodos(s, ctx, first) {
+  s.site = s.site || { seen: {}, designAt: {} };
+  const seed = !s.site.started; s.site.started = s.site.started || new Date().toISOString();
+  const today = melbToday(0), out = [], ticked = [];
+  const todos = await loadTodos();
+  // 1. tick off open ones whose proposal has gone out
+  for (const t of todos.items) {
+    if (t.done || !t.meta || t.meta.kind !== 'siteproposal' || !t.meta.day || t.meta.day < melbToday(-30)) continue;
+    const why = await siteProposalSent(s, ctx, t.meta);
+    if (why) { await updateTodo(t.id, { done: true }); t.done = true; ticked.push(t.meta.customer + ' (' + why + ')'); }
+  }
+  // 2. finished site appointments from the last 3 days
+  const q = new URLSearchParams({ singleEvents: 'true', orderBy: 'startTime', timeMin: new Date(Date.now() - 3 * 864e5).toISOString(), timeMax: new Date().toISOString(), maxResults: '100' });
+  const ev = await g(CAL + '/events?' + q);
+  for (const e of ev.items || []) {
+    if (s.site.seen[e.id] || !e.end || !e.end.dateTime || Date.parse(e.end.dateTime) > Date.now()) continue;
+    const day = new Date(e.start.dateTime).toLocaleDateString('en-CA', { timeZone: 'Australia/Melbourne' });
+    const appt = siteAppointment(e);
+    if (!appt) continue;   // not marked seen, so a renamed event is looked at again next time
+    // first run (of Eltra or of this check): remember earlier days' visits without adding to-dos for them
+    if (first || (seed && day < today)) { s.site.seen[e.id] = 'before this check started'; continue; }
+    const low = normName(appt.name);
+    // no doubles: a proposal to-do for this customer that's still open, or added in the last fortnight
+    const dupe = todos.items.find((t) => (t.meta && t.meta.kind === 'siteproposal' && t.meta.eventId === e.id) ||
+      (/proposal/i.test(t.text || '') && normName(t.text).includes(low) && (!t.done || Date.now() - Date.parse(t.createdAt || 0) < 14 * 864e5)));
+    if (dupe) { s.site.seen[e.id] = dupe.id; continue; }
+    const meta = { kind: 'siteproposal', customer: appt.name, address: appt.address, email: appt.email, day, eventId: e.id };
+    const sent = await siteProposalSent(s, ctx, meta);
+    if (sent) { s.site.seen[e.id] = 'skipped: ' + sent; continue; }
+    const t = await addTodo({ owner: 'will', section: 'Quoting', text: 'Send Pylon proposal to ' + appt.name + (appt.address ? ' (' + appt.address + ')' : ''), due: day, ref: appt.name + ' · auto', meta });
+    todos.items.push(t); out.push(t);
+    s.site.seen[e.id] = t.id;
+  }
+  const ids = Object.keys(s.site.seen); ids.slice(0, Math.max(0, ids.length - 300)).forEach((k) => delete s.site.seen[k]);
+  const dz = Object.keys(s.site.designAt); dz.slice(0, Math.max(0, dz.length - 200)).forEach((k) => delete s.site.designAt[k]);
+  if (ticked.length) console.log('site proposal to-dos ticked off:', ticked.join(', '));
+  return out;
+}
+
 // Repeating weekly to-dos, added on the morning of the day (Melbourne time), due that day.
 const WEEKLY = [
   { key: 'payroll', day: 'Mon', owner: 'ethan', section: 'Accounts', text: 'Do payroll' },
@@ -184,7 +290,7 @@ async function automationsAsWill({ force = false } = {}) {
   const first = !s.lastRun, added = [], started = Date.now();
   const google = await googleStatus().catch(() => ({ connected: false }));   // Will's Google (background jobs run as Will)
   const jobs = await loadJobs();
-  let signedList = [];   // signed Pylon projects seen this run: { name, projectId }
+  let signedList = [], pylonProjects = null;   // signed Pylon projects seen this run: { name, projectId }; all projects loaded
 
   // 0. Weekly repeating to-dos (done first so a Pylon or Google hiccup later can't hold them up)
   try { added.push(...(await weeklyTodos(s))); } catch (e) { console.log('weekly to-dos failed', e.message); }
@@ -193,6 +299,7 @@ async function automationsAsWill({ force = false } = {}) {
     // newest projects (last ~60): enough for a small team
     let url = '/solar_projects?sort=created_at.desc&filter[is_archived]=false', projects = [];
     for (let page = 0; url && page < 4; page++) { const d = await pylon(url.replace('https://api.getpylon.com/v1', '')); projects = projects.concat(d.data || []); url = d.links && d.links.next; }
+    pylonProjects = projects;
     signedList = projects.map(pylonProject).filter((p) => p.sold && p.customer && p.customer.name).map((p) => ({ name: p.customer.name, projectId: p.id }));
     const today = melbToday(0), budget = { drafts: 2, started };
     s.follow = s.follow || {}; s.followDay = s.followDay && s.followDay.date === today ? s.followDay : { date: today, count: 0 };
@@ -273,6 +380,14 @@ async function automationsAsWill({ force = false } = {}) {
       }
     }
     const ids = Object.keys(s.calSeen); ids.slice(0, Math.max(0, ids.length - 300)).forEach((k) => delete s.calSeen[k]);
+  }
+
+  // 1b. Site appointments in Will's calendar that have finished → "Send Pylon proposal" Quoting to-dos (about hourly).
+  //     Skipped on a dashboard load that has already used most of its time; the 30-minute schedule picks it up.
+  if (google.connected && (!s.siteCheckedAt || Date.now() - Date.parse(s.siteCheckedAt) > 55 * 60000) && Date.now() - started < (force ? 15000 : 5000)) {
+    s.siteCheckedAt = new Date().toISOString();
+    try { added.push(...(await siteAppointmentTodos(s, { projects: pylonProjects, gmail: true, deadline: started + (force ? 22000 : 8000), fetches: 0, searches: 0 }, first))); }
+    catch (e) { console.log('site appointment to-dos failed', e.message); }
   }
 
   // 2. Reminders from each job's install date:
