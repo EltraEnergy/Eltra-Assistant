@@ -407,6 +407,27 @@
   .bstat { font-size: 14.5px; padding: 8px 10px; border-radius: 8px; background: var(--paper); } .bstat.ok { background: #E2F4EC; } .bstat.err { background: var(--red-soft); }
   .imp .sum summary { cursor: pointer; font-size: 14px; color: var(--blue); font-weight: 600; } .imp .sum pre { white-space: pre-wrap; font: inherit; font-size: 13.5px; background: var(--paper); border-radius: 8px; padding: 8px 10px; }
   .imp a.btn { display: inline-flex; align-items: center; text-decoration: none; }
+  /* improvements: keep everything inside the card on phones */
+  .improve, .improve .hh, .improve .hb, #impList, .imp, .imp .line, .imp .more { max-width: 100%; min-width: 0; box-sizing: border-box; }
+  .improve .hh { flex-wrap: wrap; }
+  .improve .hh h2 { min-width: 0; }
+  .improve .hh small { flex-wrap: wrap; }
+  #impLearnedCount:empty { display: none; }
+  .imptog { flex-wrap: wrap; row-gap: 6px; }
+  .imptog .impt { white-space: nowrap; }
+  .imp .why, .imp .chg, .imp .bstat, .imp .sum pre, .imp .k, .learned .lrow span { overflow-wrap: anywhere; min-width: 0; }
+  .imp .row .btn, .imp .qa .btn { max-width: 100%; white-space: normal; }
+  @media (max-width: 560px) {
+    .improve .hh { display: grid; grid-template-columns: minmax(0, 1fr); gap: 6px; }
+    .improve .hh h2 { font-size: 18px; }
+    .improve .hh small { gap: 6px 12px; }
+    .imp .line { flex-wrap: wrap; row-gap: 4px; }
+    .imp .tt { flex: 1 1 100%; align-items: flex-start; }
+    .imp .tt b { white-space: normal; overflow: visible; text-overflow: clip; overflow-wrap: anywhere; min-width: 0; }
+    .imp .tt .car { margin-top: 5px; }
+    .imp .st { margin-left: 17px; max-width: calc(100% - 17px); white-space: normal; }
+    .imp .qa { flex-wrap: wrap; }
+  }
   .learned { padding: 10px 0 4px; } .learned summary { cursor: pointer; font-weight: 600; font-size: 15px; }
   .learned .lrow { display: flex; gap: 10px; align-items: flex-start; justify-content: space-between; padding: 8px 0; border-top: 1px solid var(--line); font-size: 14.5px; }
   .card pre { white-space: pre-wrap; font: inherit; background: var(--paper); border-radius: 8px; padding: 10px; margin: 8px 0; max-height: 260px; overflow: auto; }
@@ -497,7 +518,7 @@
     </div>
   </section>
   <section class="hud improve" aria-labelledby="impH" id="impPanel" hidden>
-    <div class="hh"><h2 id="impH"><button type="button" class="imptog" id="impToggle" aria-expanded="true" aria-controls="impBody"><span class="car" aria-hidden="true">▸</span>Eltra’s improvement ideas <span class="impn" id="impCount"></span></button></h2><small><span id="impLearnedCount"></span><label class="impdone"><input type="checkbox" id="impShowDone"> Show completed</label></small></div>
+    <div class="hh"><h2 id="impH"><button type="button" class="imptog" id="impToggle" aria-expanded="true" aria-controls="impBody"><span class="car" aria-hidden="true">▸</span><span class="impt">Eltra’s improvement ideas</span> <span class="impn" id="impCount"></span></button></h2><small><span id="impLearnedCount"></span><label class="impdone"><input type="checkbox" id="impShowDone"> Show completed</label></small></div>
     <div class="hb" id="impBody"><div id="impList"></div></div>
   </section>
   <div class="cols">
