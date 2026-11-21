@@ -264,6 +264,19 @@
   .dtext b { font-weight: 700; }
   #vState { color: var(--muted); font-size: 14px; }
   #vHint { font-size: 13px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  /* mic states: listening pulses, dropped out is red ("Mic off, tap to restart"), blocked is grey; both crossed out */
+  .orb[data-state="off"] { background: var(--red); box-shadow: 0 0 0 8px var(--red-soft); }
+  .orb[data-state="off"]:hover { background: #A8352F; }
+  .orb[data-state="denied"] { background: #8A94A3; box-shadow: 0 0 0 8px #EEF0F3; }
+  .dock .orb[data-state="off"] { box-shadow: 0 0 0 6px var(--red-soft); }
+  .dock .orb[data-state="denied"] { box-shadow: 0 0 0 6px #EEF0F3; }
+  .orb[data-state="off"]::before, .orb[data-state="denied"]::before { content: ""; position: absolute; top: 50%; left: 25%; width: 50%; height: 2.5px; margin-top: -1px; background: #fff; border-radius: 2px; transform: rotate(-45deg); z-index: 2; }
+  .dock:has(.orb[data-state="off"]) #vState, .dock:has(.orb[data-state="denied"]) #vState { color: var(--red); font-weight: 600; }
+  .dock:has(.orb[data-state="off"]) #vHint, .dock:has(.orb[data-state="denied"]) #vHint { white-space: normal; }
+  @media (prefers-reduced-motion: no-preference) {
+    .orb[data-state="listening"]::after { border-color: var(--green); animation: micring 1.4s ease-out infinite; }
+    @keyframes micring { 0% { transform: scale(.92); opacity: .9; } 100% { transform: scale(1.3); opacity: 0; } }
+  }
   .chatbtn { width: 44px; height: 44px; border-radius: 50%; border: 1px solid var(--line); background: #fff; color: var(--blue); display: grid; place-items: center; cursor: pointer; position: relative; }
   .chatbtn:hover { background: var(--blue-soft); }
   .chatbtn.has::after { content: ""; position: absolute; top: 6px; right: 6px; width: 9px; height: 9px; border-radius: 50%; background: var(--amber); border: 2px solid #fff; }
