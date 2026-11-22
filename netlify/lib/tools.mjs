@@ -5,7 +5,7 @@ import { currentUser } from './util.mjs';
 import { loadPrefs, portalFor } from './prefs.mjs';
 import { loadContent, updateItem } from './content.mjs';
 import { addProposal, decide, loadImprove } from './improve.mjs';
-import { loadJobs, saveJobs, setInstall, parseDay, findJob, normName } from './jobs.mjs';
+import { loadJobs, saveJobs, setInstall, parseDay, findJob, normName, syncPreApprovals } from './jobs.mjs';
 import { smsReady, smsProvider, smsSender, sendSms, auMobile, auMobileLocal } from './sms.mjs';
 import { SKILLS, HOOKS, VOICE_TEMPLATE, RUBRIC } from './instagram-data.mjs';
 import { humanize, detect } from './instagram.mjs';
@@ -1047,7 +1047,9 @@ tool({
   input_schema: { type: 'object', properties: { customer: { type: 'string' }, date: { type: 'string' } }, required: ['customer', 'date'] },
   async run({ customer, date }) {
     const day = parseDay(date); if (!day) throw new Error('Give the date as YYYY-MM-DD');
-    const d = await loadJobs(), j = setInstall(d, customer, day, 'eltra'); await saveJobs(d);
+    const d = await loadJobs(), j = setInstall(d, customer, day, 'eltra');
+    await syncPreApprovals(d).catch((e) => console.log('DNSP pre-approval due date', e.message));   // due 7 days before the install
+    await saveJobs(d);
     return { saved: { customer: j.name, install_date: j.installDate, previous: j.previousDate }, note: j.unsigned ? 'No signed job by that name yet; the date is saved and the reminders will still run.' : undefined };
   }
 });

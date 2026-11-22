@@ -1,5 +1,6 @@
 // Automatic to-dos, so nothing slips:
-//  • a Pylon proposal gets signed  → install booking and DNSP pre-approval to-dos (plus the welcome email to-do when WELCOME_EMAIL_TODO is on)
+//  • a Pylon proposal gets signed  → install booking and DNSP pre-approval to-dos (plus the welcome email to-do when WELCOME_EMAIL_TODO is on).
+//    The pre-approval has no due date until the install date is known, then it's due 7 days before and moves with it
 //  • a proposal has sat unsigned for 3+ days → a follow-up to-do (once per project)
 //  • a proposal or signed design includes Solar Victoria (battery rebate or interest-free loan) → a "Lodge Solar Victoria application" to-do (once per project)
 //  • an "Install - name" event appears in the calendar for a signed job → install date, DNSP pre-approval and stock to-dos, and a note to Will
@@ -16,7 +17,7 @@ import { pylon, pylonReady, pylonProject, pylonDesign, DESIGN_FIELDS, toolByName
 import { googleStatus, g, CAL, GMAIL } from './google.mjs';
 import { claudeJSON } from './claude.mjs';
 import { sendWeeklySummaries, sendTo } from './weekly.mjs';
-import { loadJobs, saveJobs, upsertJob, setInstall, findJob, normName } from './jobs.mjs';
+import { loadJobs, saveJobs, upsertJob, setInstall, findJob, normName, PRE_APPROVAL_SECTION, preApprovalText, findPreApproval, preApprovalDue, syncPreApprovals } from './jobs.mjs';
 import { watchInstallChecks, isHold } from './install-check.mjs';
 
 const STATE = 'automations';
@@ -32,9 +33,17 @@ function signedTasks(name, design) {
   const kit = design ? [design.panels.join('; '), design.inverters.join('; '), design.batteries.join('; ')].filter(Boolean).join(' · ') : '';
   return [
     welcomeEmailTodoOn() && { section: 'Admin', text: 'Send ' + name + ' the welcome / next steps email', due: dayPlus(0), owner: 'will' },
-    { section: 'Install dates', text: 'Book the install date with ' + name, due: dayPlus(1), owner: 'ethan' },
-    { section: 'DNSP - Pre approval', text: 'Lodge the DNSP pre-approval for ' + name, due: dayPlus(1), owner: 'will' }
-  ].filter(Boolean);   // ordering stock comes a week before the install date (see the install check)
+    { section: 'Install dates', text: 'Book the install date with ' + name, due: dayPlus(1), owner: 'ethan' }
+  ].filter(Boolean);   // the DNSP pre-approval is added separately (see preApprovalOnSigning); ordering stock comes a week before the install date
+}
+// DNSP pre-approval for Will as soon as a job is signed: no due date until there's an install date, then 7 days before it.
+// Never doubled: an existing pre-approval to-do for that customer (open or ticked) is kept.
+async function preApprovalOnSigning(jb, todos, today) {
+  if (findPreApproval(todos.items, jb.name)) return null;
+  const t = await addTodo({ owner: 'will', section: PRE_APPROVAL_SECTION, text: preApprovalText(jb.name), due: jb.installDate ? preApprovalDue(jb.installDate, today) : '', ref: jb.name + ' · auto' });
+  todos.items.push(t);
+  if (jb.installDate) jb.dnspFor = jb.installDate;
+  return t;
 }
 const kitOf = (design) => design ? [design.panels.join('; '), design.inverters.join('; '), design.batteries.join('; ')].filter(Boolean).join(' · ') : '';
 const norm = (t) => String(t || '').toLowerCase().replace(/[^a-z0-9 ]/g, ' ').replace(/\s+/g, ' ').trim();
@@ -131,11 +140,12 @@ const before = (day, n, today) => { const d = new Date(Date.parse(day + 'T12:00:
 async function installBooked(jb, today, added) {
   const todos = await loadTodos(), low = normName(jb.name), day = jb.installDate, done = [];
   const forJob = (re) => todos.items.find((t) => re.test(t.text || '') && normName(t.text).includes(low));
-  // DNSP pre-approval for Will, due a week before the install (or today if it's sooner). Reuse an open one from signing.
-  const dnspDue = before(day, 7, today), dnsp = forJob(/dnsp pre.?approval/i);
+  // DNSP pre-approval for Will, due a week before the install (or today if it's sooner). Reuse the one from signing.
+  const dnspDue = preApprovalDue(day, today), dnsp = findPreApproval(todos.items, jb.name);
   if (dnsp && dnsp.done) done.push('DNSP pre-approval already lodged');
-  else if (dnsp) { if (!dnsp.due || dnsp.due > dnspDue) await updateTodo(dnsp.id, { due: dnspDue }); done.push('DNSP pre-approval to-do (yours) now due ' + dnspDue); }
-  else { added.push(await addTodo({ owner: 'will', section: 'DNSP - Pre approval', text: 'Lodge the DNSP pre-approval for ' + jb.name + ' (install ' + day + ')', due: dnspDue, ref: jb.name + ' · auto' })); done.push('DNSP pre-approval to-do for you, due ' + dnspDue); }
+  else if (dnsp) { if (dnsp.due !== dnspDue) await updateTodo(dnsp.id, { due: dnspDue }); done.push('DNSP pre-approval to-do (yours) now due ' + dnspDue); }
+  else { added.push(await addTodo({ owner: 'will', section: PRE_APPROVAL_SECTION, text: preApprovalText(jb.name), due: dnspDue, ref: jb.name + ' · auto' })); done.push('DNSP pre-approval to-do for you, due ' + dnspDue); }
+  jb.dnspFor = day;
   // stock order for Ethan, a week before the install (once only: the week-before reminder below then skips it)
   if (forJob(/order stock/i)) done.push('stock order to-do for Ethan was already there');
   else { added.push(await addTodo({ owner: 'ethan', section: 'Order stock', text: 'Order stock for ' + jb.name + ' (install ' + day + ')' + (jb.kit ? ': ' + jb.kit : ''), due: before(day, 7, today), ref: jb.name + ' · auto' })); done.push('stock order to-do for Ethan'); }
@@ -391,7 +401,8 @@ async function automationsAsWill({ force = false } = {}) {
         const designs = (ds.data || []).map(pylonDesign);
         const design = designs.find((x) => x.id === p.signed_design_id) || designs.find((x) => x.primary) || designs[0];
         for (const t of signedTasks(name, design)) added.push(await addTodo({ ...t, ref: name + ' · auto' }));
-        upsertJob(jobs, { name, projectId: p.id, kit: kitOf(design) });
+        const jb = upsertJob(jobs, { name, projectId: p.id, kit: kitOf(design) });
+        try { const t = await preApprovalOnSigning(jb, todos, today); if (t) added.push(t); } catch (e) { console.log('DNSP pre-approval to-do failed', name, e.message); }
         // just signed: check the signed design for Solar Victoria again (it may have changed since the proposal; designs already loaded)
         const signedId = p.signed_design_id || (design && design.id);
         if (s.sv[p.id]) s.sv[p.id].checked = s.sv[p.id].checked.filter((x) => x !== signedId);
@@ -508,6 +519,9 @@ async function automationsAsWill({ force = false } = {}) {
       }
       if (jb.flags.comm && day < inDays(-60)) jb.closed = true;
     }
+    // DNSP pre-approval due dates follow the install date (set from the calendar, job_install_date, the dashboard or a
+    // customer confirmation, and moved when it moves)
+    try { await syncPreApprovals(jobs); } catch (e) { console.log('DNSP pre-approval due dates failed', e.message); }
     await saveJobs(jobs);
   }
 
