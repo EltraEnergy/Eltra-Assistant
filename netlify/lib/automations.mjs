@@ -33,7 +33,7 @@ function signedTasks(name, design) {
   return [
     welcomeEmailTodoOn() && { section: 'Admin', text: 'Send ' + name + ' the welcome / next steps email', due: dayPlus(0), owner: 'will' },
     { section: 'Install dates', text: 'Book the install date with ' + name, due: dayPlus(1), owner: 'ethan' },
-    { section: 'DNSP', text: 'Lodge the DNSP pre-approval for ' + name, due: dayPlus(1), owner: 'will' }
+    { section: 'DNSP - Pre approval', text: 'Lodge the DNSP pre-approval for ' + name, due: dayPlus(1), owner: 'will' }
   ].filter(Boolean);   // ordering stock comes a week before the install date (see the install check)
 }
 const kitOf = (design) => design ? [design.panels.join('; '), design.inverters.join('; '), design.batteries.join('; ')].filter(Boolean).join(' · ') : '';
@@ -135,7 +135,7 @@ async function installBooked(jb, today, added) {
   const dnspDue = before(day, 7, today), dnsp = forJob(/dnsp pre.?approval/i);
   if (dnsp && dnsp.done) done.push('DNSP pre-approval already lodged');
   else if (dnsp) { if (!dnsp.due || dnsp.due > dnspDue) await updateTodo(dnsp.id, { due: dnspDue }); done.push('DNSP pre-approval to-do (yours) now due ' + dnspDue); }
-  else { added.push(await addTodo({ owner: 'will', section: 'DNSP', text: 'Lodge the DNSP pre-approval for ' + jb.name + ' (install ' + day + ')', due: dnspDue, ref: jb.name + ' · auto' })); done.push('DNSP pre-approval to-do for you, due ' + dnspDue); }
+  else { added.push(await addTodo({ owner: 'will', section: 'DNSP - Pre approval', text: 'Lodge the DNSP pre-approval for ' + jb.name + ' (install ' + day + ')', due: dnspDue, ref: jb.name + ' · auto' })); done.push('DNSP pre-approval to-do for you, due ' + dnspDue); }
   // stock order for Ethan, a week before the install (once only: the week-before reminder below then skips it)
   if (forJob(/order stock/i)) done.push('stock order to-do for Ethan was already there');
   else { added.push(await addTodo({ owner: 'ethan', section: 'Order stock', text: 'Order stock for ' + jb.name + ' (install ' + day + ')' + (jb.kit ? ': ' + jb.kit : ''), due: before(day, 7, today), ref: jb.name + ' · auto' })); done.push('stock order to-do for Ethan'); }
@@ -499,11 +499,11 @@ async function automationsAsWill({ force = false } = {}) {
         jb.flags.stock = true;
       }
       if (!jb.flags.ces && day <= today && day >= inDays(-3)) {
-        added.push(await addTodo({ owner: 'will', section: 'DNSP', text: 'Create the CES for ' + jb.name + ' and send it to the inspector', due: today, ref: jb.name + ' · auto' }));
+        added.push(await addTodo({ owner: 'will', section: 'DNSP - Grid connection', text: 'Create the CES for ' + jb.name + ' and send it to the inspector', due: today, ref: jb.name + ' · auto' }));
         jb.flags.ces = true;
       }
       if (!jb.flags.comm && day <= inDays(-14)) {
-        added.push(await addTodo({ owner: 'will', section: 'DNSP', text: 'Lodge the DNSP commissioning notice for ' + jb.name + ' (installed ' + day + ', inspection should be done)', due: today, ref: jb.name + ' · auto' }));
+        added.push(await addTodo({ owner: 'will', section: 'DNSP - Grid connection', text: 'Lodge the DNSP commissioning notice for ' + jb.name + ' (installed ' + day + ', inspection should be done)', due: today, ref: jb.name + ' · auto' }));
         jb.flags.comm = true;
       }
       if (jb.flags.comm && day < inDays(-60)) jb.closed = true;
