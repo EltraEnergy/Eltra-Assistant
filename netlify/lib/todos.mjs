@@ -98,8 +98,30 @@ function updateOne(d, id, patch) {
   if (patch.section !== undefined) it.section = pickSection(d, patch.section, true);
   if (patch.due !== undefined) it.due = /^\d{4}-\d{2}-\d{2}$/.test(patch.due || '') ? patch.due : '';
   if (patch.owner !== undefined) { it.owner = ownerOf(patch.owner); it.ownerSet = true; }
-  if (patch.done !== undefined) { it.done = !!patch.done; it.doneAt = it.done ? new Date().toISOString() : undefined; }
+  if (patch.done !== undefined) {
+    const was = !!it.done;
+    it.done = !!patch.done; it.doneAt = it.done ? new Date().toISOString() : undefined;
+    if (it.done && !was) dnspNextStep(d, it);
+  }
   return it;
+}
+// DNSP pipeline (Will asked for this): ticking off a step leaves it in the done history and puts an open
+// to-do for the same customer in the next step, so the job stays on the list until the retailer request is done.
+const DNSP_NEXT = [
+  { from: 'DNSP - Pre approval', to: 'DNSP - Grid connection', text: 'Grid connection' },
+  { from: 'DNSP - Grid connection', to: 'DNSP - Retailer request', text: 'Confirm meter reconfigured' }
+];
+// who a to-do is about: its ref without the " · auto" tag (else the customer saved on it)
+const customerOf = (x) => String(x.ref || (x.meta && x.meta.customer) || '').replace(/\s*·\s*auto\s*$/i, '').trim().toLowerCase();
+function dnspNextStep(d, it) {
+  const step = DNSP_NEXT.find((s) => keyOf(s.from) === keyOf(it.section));
+  if (!step) return null;
+  const who = customerOf(it), toKey = keyOf(step.to);
+  // don't double up: an open to-do for this customer is already in the next step, or this one was moved on before
+  const there = d.items.find((x) => x !== it && ((x.meta && x.meta.dnspFrom === it.id) || (!x.done && keyOf(x.section) === toKey && who && customerOf(x) === who)));
+  if (there) return null;
+  // no ref: keep what the old to-do said as the ref, so it's still clear which job it is
+  return addOne(d, { section: step.to, text: step.text, ref: it.ref || it.text, owner: 'will', meta: { dnspFrom: it.id } });
 }
 export const addTodo = (input) => serial(async () => { const d = await loadTodos(), item = addOne(d, input); await save(d); return item; });
 export const updateTodo = (id, patch) => serial(async () => { const d = await loadTodos(), it = updateOne(d, id, patch); await save(d); return it; });
