@@ -4,6 +4,8 @@
 //  • a proposal or signed design includes Solar Victoria (battery rebate or interest-free loan) → a "Lodge Solar Victoria application" to-do (once per project)
 //  • an "Install - name" event appears in the calendar for a signed job → install date, DNSP pre-approval and stock to-dos, and a note to Will
 //  • a site appointment in Will's calendar has finished → a "Send Pylon proposal to …" Quoting to-do (ticked off once it's sent)
+//    (website booking-form events too: "Will & <name> in home …"), and each morning any finished sales visit with no
+//    proposal to-do or Pylon project is flagged in Will's brief
 //  • an install date check (customer asked by email/text if a date suits) → reads their reply: confirmed records the date,
 //    a decline or other day is flagged to Ethan, no reply in 2 days → a follow-up to-do for Ethan (see install-check.mjs)
 //  • every Monday morning → "Do payroll", every Saturday morning → "Do ServiceM8" (Ethan, Accounts, due that day)
@@ -168,6 +170,23 @@ const looksAddress = (t) => !!t && !/^https?:/i.test(t) && STREET.test(t);
 const SITE_FILLER = /\b(eltra|energy|solar|battery|batteries|site|visit|appointment|assessment|consult(ation)?|quote|quoting|sales|meeting|onsite|on|with|for|at|and|the|a|new|lead)\b/gi;
 const cleanName = (t) => String(t || '').replace(SITE_FILLER, ' ').replace(/[-–—|:()[\]/,]/g, ' ').replace(/\s+/g, ' ').trim();
 const isName = (t) => /^\p{L}[\p{L}'. -]{1,58}[\p{L}.]$/u.test(t);
+// Website booking-form appointments have no "Invitee:" block: the title is "Will & <Name> in home …", the phone and
+// email are somewhere in the description and the address is the location. → { name, address, email, phone } or null
+const BOOKING_TITLE = /^\s*will\s*(?:&|\+|and)\s*(.+?)\s*(?:\b(?:in[- ]?home|at home|home|on[- ]?site|site|solar|battery|consult\w*|appointment|assessment|quote|visit|sales|meeting)\b|[-–—|:(]|$)/i;
+const plainText = (t) => String(t || '').replace(/<br\s*\/?>|<\/div>|<\/p>|<\/li>/gi, '\n').replace(/<[^>]+>/g, ' ').replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>');
+function bookingForm(e) {
+  const m = String(e.summary || '').match(BOOKING_TITLE);
+  const name = m ? cleanName(m[1]) : '';
+  if (!name || !isName(name) || /^(will|ethan|team)$/i.test(name)) return null;
+  const desc = plainText(e.description);
+  const email = ((desc.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi) || []).find((x) => !/eltra|calendar|google\.com|noreply|no-reply/i.test(x))) || '';
+  const ph = desc.match(/(?:\+?61[\s-]?|\b0)[2-478](?:[\s-]?\d){8}\b/);
+  const loc = String(e.location || '').trim();
+  const address = loc && !/^https?:/i.test(loc) && !/\b(zoom|teams|meet|phone)\b/i.test(loc) ? loc : '';
+  // something must say it's a customer visit, so "Will & Sarah" dinner plans aren't picked up
+  if (!(SITE_WORDS.test(e.summary) || /\bhome\b/i.test(e.summary) || email || ph || looksAddress(address))) return null;
+  return { name: name.replace(/\s+/g, ' '), address: address.replace(/,?\s*(australia|aus)\s*$/i, '').trim(), email, phone: ph ? ph[0].replace(/\s+/g, ' ').trim() : '' };
+}
 // { name, address, email } when the event is a site appointment with a customer, otherwise null
 function siteAppointment(e) {
   const title = String(e.summary || '').trim(), desc = String(e.description || '');
@@ -176,6 +195,7 @@ function siteAppointment(e) {
   if ((e.attendees || []).some((a) => a.self && a.responseStatus === 'declined')) return null;
   if (NOT_SITE.test(title)) return null;
   const who = invitee(desc);
+  if (!who) { const b = bookingForm(e); if (b) return b; }   // "Will & Daryl in home consultation" (website booking form)
   const parts = title.split(/\s+[-–—|:]\s+|[–—|:]/).map((x) => x.trim()).filter(Boolean);
   const address = (looksAddress(e.location) && e.location) || (who && who.address) || parts.find(looksAddress) || '';
   const site = SITE_WORDS.test(title) || /appointment details|site visit|site assessment/i.test(desc) || !!who;
@@ -189,10 +209,11 @@ function siteAppointment(e) {
 function pylonFor(projects, name, address) {
   const w = normName(name), list = (projects || []).map((raw) => ({ raw, p: pylonProject(raw) })).filter((x) => x.p.customer && x.p.customer.name);
   const exact = list.find((x) => normName(x.p.customer.name) === w); if (exact) return exact;
-  const loose = list.filter((x) => { const n = normName(x.p.customer.name); return n.length >= 3 && w.length >= 3 && (w.includes(n) || n.includes(w)); });
-  if (loose.length === 1) return loose[0];
   const street = normName(String(address || '').split(',')[0]);
   const byAddr = street.length >= 6 ? list.filter((x) => normName(x.p.address).startsWith(street)) : [];
+  if (byAddr.length === 1 && !w.includes(' ')) return byAddr[0];   // first name only (booking form): trust the street first
+  const loose = list.filter((x) => { const n = normName(x.p.customer.name); return n.length >= 3 && w.length >= 3 && (w.includes(n) || n.includes(w)); });
+  if (loose.length === 1) return loose[0];
   return byAddr.length === 1 ? byAddr[0] : null;
 }
 // has the proposal gone out since the visit? Pylon: job signed, or a proposal (primary design) made on or after the visit
@@ -246,7 +267,7 @@ async function siteAppointmentTodos(s, ctx, first) {
     const dupe = todos.items.find((t) => (t.meta && t.meta.kind === 'siteproposal' && t.meta.eventId === e.id) ||
       (/proposal/i.test(t.text || '') && normName(t.text).includes(low) && (!t.done || Date.now() - Date.parse(t.createdAt || 0) < 14 * 864e5)));
     if (dupe) { s.site.seen[e.id] = dupe.id; continue; }
-    const meta = { kind: 'siteproposal', customer: appt.name, address: appt.address, email: appt.email, day, eventId: e.id };
+    const meta = { kind: 'siteproposal', customer: appt.name, address: appt.address, email: appt.email, phone: appt.phone || '', day, eventId: e.id };
     const sent = await siteProposalSent(s, ctx, meta);
     if (sent) { s.site.seen[e.id] = 'skipped: ' + sent; continue; }
     const t = await addTodo({ owner: 'will', section: 'Quoting', text: 'Send Pylon proposal to ' + appt.name + (appt.address ? ' (' + appt.address + ')' : ''), due: day, ref: appt.name + ' · auto', meta });
@@ -257,6 +278,53 @@ async function siteAppointmentTodos(s, ctx, first) {
   const dz = Object.keys(s.site.designAt); dz.slice(0, Math.max(0, dz.length - 200)).forEach((k) => delete s.site.designAt[k]);
   if (ticked.length) console.log('site proposal to-dos ticked off:', ticked.join(', '));
   return out;
+}
+
+// ---- Daily check: finished sales visits with no proposal to-do or Pylon project ----
+// Once each morning, look back over the last week of Will's calendar. Any sales visit that has finished with no
+// "Send Pylon proposal" to-do (open or done) and no Pylon project for that customer is saved for Will's morning
+// brief (see siteMissedBrief), so a visit can't slip through even if the to-do above wasn't made.
+const SALES_VISIT = /appointment details|assessment|site visit|consult|quote|sales|in[- ]?home/i;
+const NOT_SALES = /install|commission|inspection|service call|maintenance/i;
+const hasProposalTodo = (items, eventId, name) => {
+  const low = normName(name);
+  return items.some((t) => (t.meta && t.meta.eventId === eventId) || (low.length >= 3 && /proposal/i.test(t.text || '') && normName(t.text).includes(low)));
+};
+async function siteMissedCheck(s, projects) {
+  const today = melbToday(0);
+  const q = new URLSearchParams({ singleEvents: 'true', orderBy: 'startTime', timeMin: new Date(Date.now() - 7 * 864e5).toISOString(), timeMax: new Date().toISOString(), maxResults: '150' });
+  const ev = await g(CAL + '/events?' + q);
+  const todos = await loadTodos(), items = [];
+  for (const e of ev.items || []) {
+    if (!e.end || !e.end.dateTime || Date.parse(e.end.dateTime) > Date.now()) continue;
+    let appt = siteAppointment(e);
+    // a sales visit Eltra couldn't read a customer name from still gets flagged, under its title
+    if (!appt) {
+      const title = String(e.summary || '').trim();
+      if (!title || e.status === 'cancelled' || (e.eventType && e.eventType !== 'default') || NOT_SITE.test(title) || NOT_SALES.test(title)) continue;
+      if ((e.attendees || []).some((a) => a.self && a.responseStatus === 'declined')) continue;
+      if (!SALES_VISIT.test(title + ' ' + (e.description || ''))) continue;
+      appt = { name: '', title, address: String(e.location || '').trim() };
+    }
+    if (hasProposalTodo(todos.items, e.id, appt.name)) continue;
+    if (projects && pylonFor(projects, appt.name || appt.title, appt.address)) continue;
+    items.push({ name: appt.name, title: e.summary || '', address: appt.address || '', phone: appt.phone || '', email: appt.email || '', eventId: e.id,
+      day: new Date(e.start.dateTime).toLocaleDateString('en-CA', { timeZone: 'Australia/Melbourne' }) });
+  }
+  s.siteMissed = { day: today, at: new Date().toISOString(), pylon: !!projects, items };
+  if (items.length) console.log('sales visits with no proposal to-do or Pylon project:', items.map((x) => x.name || x.title).join(', '));
+}
+// A few lines for Will's morning brief from today's check (dropping any that have since got a proposal to-do).
+export async function siteMissedBrief() {
+  const s = (await store().get(STATE, { type: 'json' })) || {}, m = s.siteMissed;
+  if (!m || m.day !== melbToday(0)) return '';
+  const todos = await loadTodos();
+  const left = m.items.filter((x) => !hasProposalTodo(todos.items, x.eventId, x.name));
+  if (!left.length) return '';
+  const fmt = (d) => new Date(d + 'T12:00:00Z').toLocaleDateString('en-AU', { weekday: 'short', day: 'numeric', month: 'short' });
+  return 'Sales visits check (this morning): ' + left.length + ' finished sales visit' + (left.length === 1 ? '' : 's') + ' from the last week ha' + (left.length === 1 ? 's' : 've') + ' no "Send Pylon proposal" to-do and no Pylon project' + (m.pylon ? '' : ' (Pylon wasn’t checked)') + ': ' +
+    left.map((x) => (x.name || '"' + x.title + '"') + ' – ' + fmt(x.day) + (x.address ? ', ' + x.address : '') + (x.phone ? ', ' + x.phone : '') + (x.email ? ', ' + x.email : '')).join('; ') +
+    '. Flag these to Will in his morning brief and offer to add the proposal to-dos.';
 }
 
 // Repeating weekly to-dos, added on the morning of the day (Melbourne time), due that day.
@@ -391,6 +459,11 @@ async function automationsAsWill({ force = false } = {}) {
     s.siteCheckedAt = new Date().toISOString();
     try { added.push(...(await siteAppointmentTodos(s, { projects: pylonProjects, gmail: true, deadline: started + (force ? 22000 : 8000), fetches: 0, searches: 0 }, first))); }
     catch (e) { console.log('site appointment to-dos failed', e.message); }
+  }
+
+  // 1b2. Once each morning (from 5am): flag finished sales visits with no proposal to-do or Pylon project for Will's brief.
+  if (google.connected && !first && melbWeekdayHour().hour >= 5 && (s.siteMissed || {}).day !== melbToday(0) && Date.now() - started < (force ? 16000 : 5000)) {
+    try { await siteMissedCheck(s, pylonProjects); } catch (e) { console.log('sales visit check failed', e.message); }
   }
 
   // 1c. Install date checks: read customers' replies (email and text) to "does this date suit?". A confirmed date is
