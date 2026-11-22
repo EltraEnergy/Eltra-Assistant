@@ -1,7 +1,8 @@
 // Eltra's record of each signed job: customer, Pylon project, kit and install date. The install date can come from
 // Ethan ticking "Book the install date" (dashboard asks for it), from anyone telling Eltra, or from an "Install – name"
 // event in Will's or Ethan's calendar. The after-sale reminders (stock, CES, commissioning) run from this record.
-import { store } from './util.mjs';
+import { store, melbToday } from './util.mjs';
+import { loadTodos, updateTodo } from './todos.mjs';
 import crypto from 'node:crypto';
 
 const KEY = 'jobs';
@@ -41,4 +42,47 @@ export function setInstall(d, who, day, source, projectId) {
   if (source === 'calendar' && j.installDate && j.installSource && j.installSource !== 'calendar') return j;
   if (j.installDate !== day) { if (j.installDate) j.previousDate = j.installDate; j.installDate = day; j.installSource = source; j.installSetAt = new Date().toISOString(); j.flags = { ...j.flags, ces: false, comm: false }; }
   return j;
+}
+
+// ---- DNSP pre-approval to-do (Will) ----
+// Added as soon as a job is signed ("Lodge the DNSP pre-approval for <customer>"), with no due date until the install
+// date is known. Its due date is 7 days before the install (today if that has already passed) and follows the install
+// date when it moves. job.dnspFor remembers which install date the to-do was last set for.
+export const PRE_APPROVAL_SECTION = 'DNSP - Pre approval';
+export const preApprovalText = (name) => 'Lodge the DNSP pre-approval for ' + name;
+const PRE_RE = /dnsp pre.?approval/i;
+const refName = (ref) => normName(String(ref || '').replace(/\s*·\s*auto\s*$/i, ''));
+// the pre-approval to-do for a customer (open first, then a ticked one), or null
+export function findPreApproval(items, name) {
+  const low = normName(name); if (!low) return null;
+  const pre = (items || []).filter((t) => PRE_RE.test(t.text || ''));
+  // the customer as ref first, then their whole name in the text
+  let hits = pre.filter((t) => refName(t.ref) === low);
+  if (!hits.length) hits = pre.filter((t) => (' ' + normName(t.text) + ' ').includes(' ' + low + ' '));
+  return hits.find((t) => !t.done) || hits[0] || null;
+}
+// the due date for an install day: 7 days before, never earlier than today
+export function preApprovalDue(day, today = melbToday(0)) {
+  const d = new Date(Date.parse(day + 'T12:00:00Z') - 7 * 864e5).toISOString().slice(0, 10);
+  return d < today ? today : d;
+}
+// set or move the due date of each job's open pre-approval to-do to match its install date. Marks job.dnspFor;
+// the caller saves the jobs afterwards. Returns how many to-dos were changed.
+export async function syncPreApprovals(d, todos) {
+  const pending = d.list.filter((j) => j.installDate && !j.closed && j.dnspFor !== j.installDate);
+  if (!pending.length) return 0;
+  const items = (todos || (await loadTodos())).items, today = melbToday(0);
+  let changed = 0;
+  for (const j of pending) {
+    const t = findPreApproval(items, j.name);
+    if (!t) continue;                                     // none for this customer: nothing to move (try again next time)
+    if (!t.done) {
+      const exact = preApprovalDue(j.installDate, '0000-00-00'), due = preApprovalDue(j.installDate, today);
+      // a week-before day that has already passed: leave a to-do that is already due or overdue as it is
+      const keep = exact < today && t.due && t.due <= today;
+      if (!keep && t.due !== due) { await updateTodo(t.id, { due }); t.due = due; changed++; }
+    }
+    j.dnspFor = j.installDate;
+  }
+  return changed;
 }

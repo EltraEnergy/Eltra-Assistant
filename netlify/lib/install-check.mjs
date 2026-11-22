@@ -8,7 +8,7 @@
 // sender's calendar (job.dateCheck.hold). Confirmed → renamed "Install – name". Declined, cancelled or the day passes
 // unconfirmed → removed, and Ethan is told. A hold someone has already renamed by hand is left alone.
 import { runAs, melbToday, clip, tz, userName, currentUser } from './util.mjs';
-import { loadJobs, saveJobs, findJob, upsertJob, setInstall } from './jobs.mjs';
+import { loadJobs, saveJobs, findJob, upsertJob, setInstall, syncPreApprovals } from './jobs.mjs';
 import { addTodo } from './todos.mjs';
 import { g, GMAIL, CAL } from './google.mjs';
 import { smsReplies } from './sms.mjs';
@@ -119,6 +119,7 @@ export const settleCheck = ({ customer, projectId, outcome, suggested, note }) =
   catch (e) { console.log('install hold', j.name, e.message); }
   if (hold && outcome !== 'confirmed' && currentUser() !== 'ethan')
     await addTodo({ owner: 'ethan', section: 'Install dates', text: 'Install hold for ' + j.name + ' on ' + fmtDay(c.date) + ' removed from the calendar (' + c.reply.summary + '). Find a new install date if needed', due: melbToday(0), ref: j.name + ' · auto' });
+  if (outcome === 'confirmed') await syncPreApprovals(d).catch((e) => console.log('DNSP pre-approval due date', e.message));   // due 7 days before the install
   await saveJobs(d);
   return { customer: j.name, install_date: j.installDate, check: checkOut(c), calendar_hold: hold ? (outcome === 'confirmed' ? 'renamed to "Install – ' + j.name + '"' : 'removed') : undefined };
 });
