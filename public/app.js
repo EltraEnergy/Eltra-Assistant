@@ -1241,33 +1241,85 @@
     var txt = d === today ? 'Today' : d < today ? 'Overdue · ' + t.toLocaleDateString('en-AU', { day: 'numeric', month: 'short' }) : t.toLocaleDateString('en-AU', { weekday: 'short', day: 'numeric', month: 'short' });
     return { cls: cls, txt: txt };
   }
-  function renderTodos() {
-    var secs = $('todoSecs'); secs.textContent = '';
-    var count = function (sname) { return todos.items.filter(function (x) { return !x.done && (todoWho === 'all' || mine(x)) && (sname === 'All' || x.section === sname); }).length; };
-    // on "Mine", only show the sections where you actually have something to do
-    var shownSecs = todoWho === 'all' ? todos.sections : todos.sections.filter(function (sname) { return count(sname) > 0 || sname === todoTab; });
-    if (todoTab !== 'All' && todos.sections.indexOf(todoTab) < 0) todoTab = 'All';
-    ['All'].concat(shownSecs).forEach(function (sname) {
-      var n = count(sname);
-      var b = document.createElement('button'); b.type = 'button'; b.setAttribute('role', 'tab'); b.setAttribute('aria-selected', sname === todoTab);
-      b.innerHTML = esc(sname) + (n ? '<span class="n">' + n + '</span>' : '');
-      b.onclick = function () { todoTab = sname; if (sname !== 'All') $('todoSec').value = sname; renderTodos(); };
-      secs.appendChild(b);
+  // "Parent - Sub" sections (e.g. "DNSP - Pre approval") show under one parent tab. The stored names don't change.
+  // todoTab is 'All', a section name, or '*' + parent name for a whole parent tab; todoOpen is the parent that's opened out.
+  var todoOpen = '';
+  function secParts(sname) { var m = /^(.+?)\s+-\s+(.+)$/.exec(sname || ''); return m ? { parent: m[1], sub: m[2] } : null; }
+  function todoGroups() {
+    var groups = [], byName = {};
+    todos.sections.forEach(function (sname) {
+      var p = secParts(sname), key = (p ? p.parent : sname).toLowerCase(), g = byName[key];
+      if (!g) { g = byName[key] = { name: p ? p.parent : sname, secs: [], subs: false }; groups.push(g); }
+      g.secs.push(sname); if (p) g.subs = true;
     });
+    return groups;
+  }
+  function tabHas(tab, x) {
+    if (tab === 'All') return true;
+    if (tab.charAt(0) === '*') { var p = secParts(x.section), key = tab.slice(1).toLowerCase(); return (p ? p.parent : x.section).toLowerCase() === key; }
+    return x.section === tab;
+  }
+  function tabLabel(tab) { return tab.charAt(0) === '*' ? tab.slice(1) : tab; }
+  function tabExists(tab) {
+    if (tab === 'All') return true;
+    if (tab.charAt(0) === '*') return todoGroups().some(function (g) { return g.subs && g.name === tab.slice(1); });
+    return todos.sections.indexOf(tab) >= 0;
+  }
+  function renderTodos() {
+    var secs = $('todoSecs'), subs = $('todoSubs'); secs.textContent = ''; subs.textContent = '';
+    var count = function (tab) { return todos.items.filter(function (x) { return !x.done && (todoWho === 'all' || mine(x)) && tabHas(tab, x); }).length; };
+    if (!tabExists(todoTab)) todoTab = 'All';
+    var groups = todoGroups(), openG = null;
+    var tabBtn = function (label, tab, n, parent) {
+      var b = document.createElement('button'); b.type = 'button'; b.setAttribute('role', 'tab'); b.setAttribute('aria-selected', tab === todoTab);
+      b.innerHTML = esc(label) + (n ? '<span class="n">' + n + '</span>' : '');
+      parent.appendChild(b); return b;
+    };
+    // top row: All, then each plain section or parent tab. On "Mine", only show the ones where you actually have something to do
+    tabBtn('All', 'All', count('All'), secs).onclick = function () { todoTab = 'All'; renderTodos(); };
+    groups.forEach(function (g) {
+      var tab = g.subs ? '*' + g.name : g.name, inG = g.subs && (todoTab === tab || g.secs.indexOf(todoTab) >= 0), n = count(tab);
+      if (todoWho !== 'all' && !n && !inG && tab !== todoTab) return;
+      if (!g.subs) { tabBtn(g.name, tab, n, secs).onclick = function () { todoTab = tab; $('todoSec').value = tab; renderTodos(); }; return; }
+      var isOpen = todoOpen === g.name, b = tabBtn(g.name, tab, n, secs);
+      if (inG) b.setAttribute('aria-selected', 'true');
+      b.setAttribute('aria-expanded', isOpen); b.setAttribute('aria-controls', 'todoSubs');
+      b.innerHTML += '<span class="car" aria-hidden="true">' + (isOpen ? '▾' : '▸') + '</span>';
+      if (isOpen) openG = g;
+      // first click opens it out (showing the whole group); clicking it again folds the sub-sections away
+      b.onclick = function () { if (todoOpen === g.name && inG) todoOpen = ''; else { todoOpen = g.name; if (!inG) todoTab = tab; } renderTodos(); };
+    });
+    // second row: the opened parent's sub-sections, each with its own count
+    subs.hidden = !openG;
+    if (openG) {
+      var all = '*' + openG.name;
+      tabBtn('All ' + openG.name, all, count(all), subs).onclick = function () { todoTab = all; renderTodos(); };
+      openG.secs.forEach(function (sname) {
+        var p = secParts(sname), n = count(sname);
+        if (todoWho !== 'all' && !n && sname !== todoTab) return;
+        tabBtn(p ? p.sub : 'General', sname, n, subs).onclick = function () { todoTab = sname; $('todoSec').value = sname; renderTodos(); };
+      });
+    }
+    // "Add" section picker: sub-sections sit under their parent's heading
     var sel = $('todoSec'), cur = sel.value; sel.textContent = '';
-    todos.sections.forEach(function (sname) { var o = document.createElement('option'); o.textContent = sname; sel.appendChild(o); });
-    sel.value = todoTab !== 'All' ? todoTab : (todos.sections.indexOf(cur) >= 0 ? cur : todos.sections[0]);
-    var inTab = todos.items.filter(function (x) { return (todoWho === 'all' || mine(x)) && (todoTab === 'All' || x.section === todoTab); });
+    groups.forEach(function (g) {
+      var into = sel;
+      if (g.subs) { into = document.createElement('optgroup'); into.label = g.name; sel.appendChild(into); }
+      g.secs.forEach(function (sname) { var o = document.createElement('option'), p = secParts(sname); o.value = sname; o.textContent = g.subs ? (p ? p.sub : 'General') : sname; into.appendChild(o); });
+    });
+    var inTabSecs = todos.sections.filter(function (sname) { return tabHas(todoTab, { section: sname }); });
+    sel.value = inTabSecs.indexOf(cur) >= 0 ? cur : todoTab !== 'All' && todoTab.charAt(0) !== '*' ? todoTab : (inTabSecs[0] || todos.sections[0]);
+    var inTab = todos.items.filter(function (x) { return (todoWho === 'all' || mine(x)) && tabHas(todoTab, x); });
     $('todoWho').querySelectorAll('button').forEach(function (b) { b.setAttribute('aria-pressed', b.dataset.who === todoWho); });
     var open = inTab.filter(function (x) { return !x.done; }).sort(function (a, b) { return (a.due || '9999') < (b.due || '9999') ? -1 : (a.due || '9999') > (b.due || '9999') ? 1 : a.createdAt < b.createdAt ? -1 : 1; });
     var done = inTab.filter(function (x) { return x.done; }).sort(function (a, b) { return (b.doneAt || '') < (a.doneAt || '') ? -1 : 1; });
     var list = $('todoList'); list.textContent = '';
-    if (!open.length) { var e = document.createElement('li'); e.className = 'empty'; e.textContent = todoTab === 'All' ? 'Nothing to do. Add one above, or ask Eltra to.' : 'Nothing in ' + todoTab + '.'; list.appendChild(e); }
+    if (!open.length) { var e = document.createElement('li'); e.className = 'empty'; e.textContent = todoTab === 'All' ? 'Nothing to do. Add one above, or ask Eltra to.' : 'Nothing in ' + tabLabel(todoTab) + '.'; list.appendChild(e); }
     open.concat(showDone ? done : []).forEach(function (it) {
       var li = document.createElement('li'); if (it.done) li.className = 'done';
       var due = todoDueText(it.due);
       li.innerHTML = '<input type="checkbox"' + (it.done ? ' checked' : '') + ' aria-label="Done: ' + esc(it.text) + '">' +
-        '<span class="tt">' + esc(it.text) + '<small>' + [todoTab === 'All' ? it.section : '', it.ref, (it.owner && it.owner !== me.user) ? 'for ' + OWNER[it.owner] : ''].filter(Boolean).map(esc).join(' · ') + '</small></span>' +
+        '<span class="tt">' + esc(it.text) + '<small>' + [todoTab === 'All' ? it.section : todoTab.charAt(0) === '*' ? (secParts(it.section) || { sub: '' }).sub : '', it.ref, (it.owner && it.owner !== me.user) ? 'for ' + OWNER[it.owner] : ''].filter(Boolean).map(esc).join(' · ') + '</small></span>' +
         '<span class="due ' + (due && !it.done ? due.cls : '') + '">' + (it.meta && it.meta.kind === 'followup' && !it.done ? '<button type="button" class="tdraft" data-draft>Write email</button> ' : '') + (due ? esc(due.txt) : '') + '</span>' +
         '<button type="button" class="x" aria-label="Delete: ' + esc(it.text) + '">×</button>';
       li.querySelector('input').onchange = function (ev) {
@@ -1306,7 +1358,7 @@
   $('todoEditSec').onclick = function () {
     var v = prompt('Sections, separated by commas:', todos.sections.join(', '));
     if (v === null) return;
-    todoCall({ action: 'sections', sections: v.split(',').map(function (x) { return x.trim(); }).filter(Boolean) }).then(function () { if (todos.sections.indexOf(todoTab) < 0) todoTab = 'All'; renderTodos(); });
+    todoCall({ action: 'sections', sections: v.split(',').map(function (x) { return x.trim(); }).filter(Boolean) }).then(function () { if (!tabExists(todoTab)) todoTab = 'All'; renderTodos(); });
   };
 
   // ================= start =================
