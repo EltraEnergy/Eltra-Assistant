@@ -5,7 +5,7 @@ import { currentUser } from './util.mjs';
 import { loadPrefs, portalFor } from './prefs.mjs';
 import { loadContent, updateItem } from './content.mjs';
 import { addProposal, decide, loadImprove } from './improve.mjs';
-import { loadJobs, saveJobs, setInstall, parseDay, findJob } from './jobs.mjs';
+import { loadJobs, saveJobs, setInstall, parseDay, findJob, normName } from './jobs.mjs';
 import { smsReady, smsProvider, smsSender, sendSms, auMobile, auMobileLocal } from './sms.mjs';
 import { SKILLS, HOOKS, VOICE_TEMPLATE, RUBRIC } from './instagram-data.mjs';
 import { humanize, detect } from './instagram.mjs';
@@ -362,6 +362,56 @@ tool({
   async run(i) {
     const e = await g(CAL + '/events?sendUpdates=' + (i.attendees && i.attendees.length ? 'all' : 'none'), { method: 'POST', body: JSON.stringify({ summary: i.title, location: i.location, description: i.description, start: { dateTime: i.start.length === 16 ? i.start + ':00' : i.start, timeZone: tz }, end: { dateTime: i.end.length === 16 ? i.end + ':00' : i.end, timeZone: tz }, attendees: (i.attendees || []).map((email) => ({ email })) }) });
     return { created: true, link: e.htmlLink };
+  }
+});
+// change or remove an existing event (ids come from calendar_events)
+const calEv = (id) => CAL + '/events/' + encodeURIComponent(id);
+const evWhen = (e) => (e.start && e.start.date ? e.start.date + ' (all day)' : e.start && e.start.dateTime ? melbDate(e.start.dateTime) : '');
+const evGuests = (e) => (e && e.attendees || []).filter((a) => !a.self).length;
+tool({
+  name: 'calendar_update_event', group: 'google', action: true,
+  description: 'Change an event on Will’s Google Calendar: title, times, location or description. event_id comes from calendar_events. Only give what changes. Times are Melbourne local time as YYYY-MM-DDTHH:MM; all_day_date (YYYY-MM-DD) makes it an all-day event on that day instead. Anyone invited gets the update.',
+  input_schema: { type: 'object', properties: { event_id: { type: 'string' }, title: { type: 'string' }, start: { type: 'string' }, end: { type: 'string' }, all_day_date: { type: 'string' }, location: { type: 'string' }, description: { type: 'string' } }, required: ['event_id'] },
+  async describe(i) {
+    const e = await g(calEv(i.event_id)).catch(() => null);
+    return { title: 'Change calendar event', lines: [
+      e ? 'Event: ' + (e.summary || '(no title)') + ', ' + evWhen(e) : 'Event id: ' + i.event_id,
+      i.title && 'New title: ' + i.title,
+      i.all_day_date ? 'New day: ' + i.all_day_date + ' (all day)' : (i.start || i.end) && 'New time: ' + (i.start || '…').replace('T', ' ') + ' to ' + (i.end || '…').replace('T', ' '),
+      i.location && 'Location: ' + i.location, i.description && 'New description',
+      evGuests(e) ? 'Guests (' + evGuests(e) + ') get the update.' : null
+    ].filter(Boolean) };
+  },
+  async run(i) {
+    const cur = await g(calEv(i.event_id)), body = {};
+    if (i.title) body.summary = i.title;
+    if (i.location) body.location = i.location;
+    if (i.description) body.description = i.description;
+    const dt = (v) => ({ dateTime: v.length === 16 ? v + ':00' : v, timeZone: tz, date: null });
+    if (i.all_day_date) {
+      const day = parseDay(i.all_day_date); if (!day) throw new Error('Give all_day_date as YYYY-MM-DD');
+      body.start = { date: day, dateTime: null, timeZone: null }; body.end = { date: new Date(Date.parse(day + 'T12:00:00Z') + 864e5).toISOString().slice(0, 10), dateTime: null, timeZone: null };
+    } else {
+      if (i.start) body.start = dt(i.start);
+      if (i.end) body.end = dt(i.end);
+    }
+    if (!Object.keys(body).length) throw new Error('Nothing to change.');
+    const e = await g(calEv(i.event_id) + '?sendUpdates=' + (evGuests(cur) ? 'all' : 'none'), { method: 'PATCH', body: JSON.stringify(body) });
+    return { updated: true, event: eventOut(e) };
+  }
+});
+tool({
+  name: 'calendar_delete_event', group: 'google', action: true,
+  description: 'Remove an event from Will’s Google Calendar (for example an install HOLD that is no longer needed). event_id comes from calendar_events. Anyone invited is told it is cancelled.',
+  input_schema: { type: 'object', properties: { event_id: { type: 'string' } }, required: ['event_id'] },
+  async describe(i) {
+    const e = await g(calEv(i.event_id)).catch(() => null);
+    return { title: 'Remove from calendar', lines: [e ? (e.summary || '(no title)') + ', ' + evWhen(e) : 'Event id: ' + i.event_id, evGuests(e) ? 'Guests (' + evGuests(e) + ') are told it’s cancelled.' : null].filter(Boolean) };
+  },
+  async run(i) {
+    const e = await g(calEv(i.event_id));
+    await g(calEv(i.event_id) + '?sendUpdates=' + (evGuests(e) ? 'all' : 'none'), { method: 'DELETE' });
+    return { deleted: true, title: e.summary };
   }
 });
 
@@ -1004,10 +1054,11 @@ tool({
 
 // ---------- Install date availability check (ask the customer by email and text before the date is confirmed) ----------
 const CHECK_FIELDS = { customer: { type: 'string', description: 'customer name as on the job' }, date: { type: 'string', description: 'proposed install date, YYYY-MM-DD' }, project_id: { type: 'string', description: 'Pylon project id, from install_date_check' } };
+const HOLD_LINE = (i) => 'Puts an all-day "HOLD – Install – ' + i.customer + ' (awaiting confirmation)" on your calendar for ' + (parseDay(i.date) || i.date) + ' (once, no invites). It becomes "Install – ' + i.customer + '" when they confirm and comes off if they can’t.';
 const checkDay = (date) => { const day = parseDay(date); if (!day) throw new Error('Give the date as YYYY-MM-DD'); return day; };
 tool({
   name: 'install_date_check', group: 'core',
-  description: 'Step 1 of asking a customer whether a proposed install date suits them (for example "book Sarah in for Tuesday 8 December"). Looks up the customer\'s name, email, mobile and address in Pylon and the job, and returns a ready-made email and text. Then, in ONE step, call install_check_send_email (and install_check_send_sms if texts are set up and there is a mobile) so each shows its own Approve card. Use the drafts as they are unless asked to change them. Do not record the date with job_install_date yet: Eltra watches for the reply, records the date when the customer confirms, and flags declines and no-replies to Ethan.',
+  description: 'Step 1 of asking a customer whether a proposed install date suits them (for example "book Sarah in for Tuesday 8 December"). Looks up the customer\'s name, email, mobile and address in Pylon and the job, and returns a ready-made email and text, plus anything already on that day in the calendar or Eltra’s jobs (clashes, including other install HOLDs). If clash_warning is set, tell them and check they still want that day first. Then, in ONE step, call install_check_send_email (and install_check_send_sms if texts are set up and there is a mobile) so each shows its own Approve card. Use the drafts as they are unless asked to change them. Do not record the date with job_install_date yet: Eltra watches for the reply, records the date when the customer confirms, and flags declines and no-replies to Ethan.',
   input_schema: { type: 'object', properties: CHECK_FIELDS, required: ['customer', 'date'] },
   async run({ customer, date, project_id }) {
     const day = checkDay(date);
@@ -1030,10 +1081,20 @@ tool({
     if (!cust.email) note.push('No email in Pylon for this customer.');
     if (!smsReady()) note.push('Texts aren’t set up yet (Twilio or GoHighLevel in Netlify), so only send the email.');
     const drafts = draftMessages({ name, day, address: proj && proj.address });
+    // anything already on that day: calendar events (including other holds) and other jobs Eltra has booked or held
+    const ownHold = job && job.dateCheck && job.dateCheck.hold && job.dateCheck.hold.id;
+    const events = await toolByName('calendar_events').run({ from_date: day, days: 1 }).catch((e) => { note.push('Couldn’t check the calendar: ' + e.message); return []; });
+    const others = events.filter((e) => e.id !== ownHold), clashRe = /\b(hold|install(ation)?)\b/i;
+    const clashes = others.filter((e) => clashRe.test(e.title)).map((e) => ({ title: e.title, when: e.start, hold: /^\s*hold\b/i.test(e.title) }));
+    d.list.filter((x) => x !== job && !x.closed && (x.installDate === day || (x.dateCheck && x.dateCheck.date === day && ['asked', 'no reply', 'replied'].includes(x.dateCheck.status))))
+      .forEach((x) => { if (!clashes.some((c) => normName(c.title).includes(normName(x.name)))) clashes.push({ title: (x.installDate === day ? 'Install – ' : 'HOLD – Install – ') + x.name + ' (in Eltra’s jobs)', when: day, hold: x.installDate !== day }); });
     return {
       customer: name, project_id: proj && proj.id, address: proj && proj.address, email: cust.email || null, mobile: mobile, mobile_display: mobile ? auMobileLocal(mobile) : null,
       proposed_date: day, proposed_date_words: fmtDay(day), texts_ready: smsReady(), text_sender: smsReady() ? smsSender() : undefined,
-      existing_check: job ? checkOut(job.dateCheck) : null, drafts, notes: note.length ? note : undefined
+      existing_check: job ? checkOut(job.dateCheck) : null, drafts, notes: note.length ? note : undefined,
+      clashes: clashes.length ? clashes : undefined,
+      clash_warning: clashes.length ? 'Already on ' + fmtDay(day) + ': ' + clashes.map((c) => c.title).join('; ') + '. Warn them about this before sending, and only go ahead if they still want that day.' : undefined,
+      other_events_that_day: others.filter((e) => !clashRe.test(e.title)).map((e) => e.title + ' (' + e.start + ')').slice(0, 8)
     };
   }
 });
@@ -1043,7 +1104,7 @@ tool({
   input_schema: { type: 'object', properties: { ...CHECK_FIELDS, to: { type: 'string', description: 'customer email' }, subject: { type: 'string' }, body: { type: 'string', description: 'plain text, ending with a sign-off like "Cheers,"' } }, required: ['customer', 'date', 'to', 'body'] },
   async describe(i) {
     const card = await toolByName('gmail_send').describe({ to: i.to, subject: i.subject, body: i.body });
-    return { ...card, title: 'Ask ' + i.customer + ' about their install date (email)', lines: card.lines.concat(['Eltra will watch for their reply and track it on the job.']) };
+    return { ...card, title: 'Ask ' + i.customer + ' about their install date (email)', lines: card.lines.concat(['Eltra will watch for their reply and track it on the job.', HOLD_LINE(i)]) };
   },
   async run(i) {
     const day = checkDay(i.date);
@@ -1059,7 +1120,7 @@ tool({
   input_schema: { type: 'object', properties: { ...CHECK_FIELDS, to: { type: 'string', description: 'customer mobile' }, message: { type: 'string' }, email: { type: 'string', description: 'customer email, used if a GoHighLevel contact has to be made' } }, required: ['customer', 'date', 'to', 'message'] },
   async describe(i) {
     const ok = auMobile(i.to);
-    return { title: 'Ask ' + i.customer + ' about their install date (text)', lines: ['To: ' + (ok ? auMobileLocal(ok) : i.to + ' (not an Australian mobile, so this will fail)'), 'From: ' + smsSender()].concat(smsProvider() === 'ghl' ? ['Uses their GoHighLevel contact (made if they don’t have one).'] : [], ['Eltra will watch for their reply and track it on the job.']), preview: i.message };
+    return { title: 'Ask ' + i.customer + ' about their install date (text)', lines: ['To: ' + (ok ? auMobileLocal(ok) : i.to + ' (not an Australian mobile, so this will fail)'), 'From: ' + smsSender()].concat(smsProvider() === 'ghl' ? ['Uses their GoHighLevel contact (made if they don’t have one).'] : [], ['Eltra will watch for their reply and track it on the job.', HOLD_LINE(i)]), preview: i.message };
   },
   async run(i) {
     const day = checkDay(i.date);
@@ -1071,7 +1132,7 @@ tool({
 });
 tool({
   name: 'install_check_update', group: 'core',
-  description: 'Set the answer to an install date check by hand, when Will or Ethan says the customer has answered some other way (rang, told them on site) or the check is no longer needed. outcome confirmed also records the install date (no need to call job_install_date). other_date: put their suggested day in suggested_date.',
+  description: 'Set the answer to an install date check by hand, when Will or Ethan says the customer has answered some other way (rang, told them on site) or the check is no longer needed. outcome confirmed also records the install date (no need to call job_install_date) and renames the calendar hold to "Install – <customer name>"; declined, other_date and cancelled remove the hold (cancelled also releases the date when there has been no reply). other_date: put their suggested day in suggested_date.',
   input_schema: { type: 'object', properties: { customer: { type: 'string' }, outcome: { type: 'string', enum: ['confirmed', 'declined', 'other_date', 'cancelled'] }, suggested_date: { type: 'string' }, note: { type: 'string', description: 'what the customer said, in a few words' } }, required: ['customer', 'outcome'] },
   async run({ customer, outcome, suggested_date, note }) {
     const { settleCheck } = await import('./install-check.mjs');

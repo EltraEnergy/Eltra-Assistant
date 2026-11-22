@@ -15,7 +15,7 @@ import { googleStatus, g, CAL, GMAIL } from './google.mjs';
 import { claudeJSON } from './claude.mjs';
 import { sendWeeklySummaries, sendTo } from './weekly.mjs';
 import { loadJobs, saveJobs, upsertJob, setInstall, findJob, normName } from './jobs.mjs';
-import { watchInstallChecks } from './install-check.mjs';
+import { watchInstallChecks, isHold } from './install-check.mjs';
 
 const STATE = 'automations';
 const dayPlus = (n) => { const d = new Date(Date.now() + n * 864e5); return d.toLocaleDateString('en-CA', { timeZone: 'Australia/Melbourne' }); };
@@ -358,7 +358,7 @@ async function automationsAsWill({ force = false } = {}) {
         const ev = await g(CAL + '/events?' + q).catch(() => ({ items: [] }));
         const toDay = (x) => x && (x.date || (x.dateTime && new Date(x.dateTime).toLocaleDateString('en-CA', { timeZone: 'Australia/Melbourne' }))) || '';
         for (const e of ev.items || []) {
-          if (!/install/i.test(e.summary || '') || e.status === 'cancelled') continue;
+          if (!/install/i.test(e.summary || '') || isHold(e.summary) || e.status === 'cancelled') continue;   // a HOLD isn't a booking yet
           const day = toDay(e.start); if (day) found.push({ id: e.id, summary: e.summary, day });
         }
       }).catch(() => {});
