@@ -732,7 +732,7 @@ tool({
 });
 tool({
   name: 'todo_update', group: 'core',
-  description: 'Tick off (done: true), reopen, rename, move (section, e.g. "DNSP - Grid connection") or re-date a to-do by id (get ids from todo_list). To change several to-dos, put them all in updates in ONE call (never several todo_update calls at once, or some changes can be lost), then check each result and tell the person about any that failed.',
+  description: 'Tick off (done: true), reopen, rename, move (section, e.g. "DNSP - Grid connection") or re-date a to-do by id (get ids from todo_list). Ticking off a "DNSP - Pre approval" to-do automatically adds a "Grid connection" to-do for that customer, and ticking off a "DNSP - Grid connection" one adds "Confirm meter reconfigured" under "DNSP - Retailer request", so don\'t add those yourself. To change several to-dos, put them all in updates in ONE call (never several todo_update calls at once, or some changes can be lost), then check each result and tell the person about any that failed.',
   input_schema: { type: 'object', properties: { ...UPDATE_FIELDS, updates: { type: 'array', description: 'Several to-dos to change in one go, each with its id and the fields to change.', items: { type: 'object', properties: UPDATE_FIELDS, required: ['id'] } } } },
   async run({ updates, ...one }) {
     const patchOf = ({ for: f, ...patch }) => (f ? { ...patch, owner: f } : patch);
