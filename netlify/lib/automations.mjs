@@ -4,6 +4,8 @@
 //  • a proposal or signed design includes Solar Victoria (battery rebate or interest-free loan) → a "Lodge Solar Victoria application" to-do (once per project)
 //  • an "Install - name" event appears in the calendar for a signed job → install date, DNSP pre-approval and stock to-dos, and a note to Will
 //  • a site appointment in Will's calendar has finished → a "Send Pylon proposal to …" Quoting to-do (ticked off once it's sent)
+//  • an install date check (customer asked by email/text if a date suits) → reads their reply: confirmed records the date,
+//    a decline or other day is flagged to Ethan, no reply in 2 days → a follow-up to-do for Ethan (see install-check.mjs)
 //  • every Monday morning → "Do payroll", every Saturday morning → "Do ServiceM8" (Ethan, Accounts, due that day)
 // Runs on a schedule (functions/automations.mjs) and whenever the dashboard loads the to-do list (at most every 15 min).
 import { store, runAs, melbToday } from './util.mjs';
@@ -13,6 +15,7 @@ import { googleStatus, g, CAL, GMAIL } from './google.mjs';
 import { claudeJSON } from './claude.mjs';
 import { sendWeeklySummaries, sendTo } from './weekly.mjs';
 import { loadJobs, saveJobs, upsertJob, setInstall, findJob, normName } from './jobs.mjs';
+import { watchInstallChecks } from './install-check.mjs';
 
 const STATE = 'automations';
 const dayPlus = (n) => { const d = new Date(Date.now() + n * 864e5); return d.toLocaleDateString('en-CA', { timeZone: 'Australia/Melbourne' }); };
@@ -388,6 +391,19 @@ async function automationsAsWill({ force = false } = {}) {
     s.siteCheckedAt = new Date().toISOString();
     try { added.push(...(await siteAppointmentTodos(s, { projects: pylonProjects, gmail: true, deadline: started + (force ? 22000 : 8000), fetches: 0, searches: 0 }, first))); }
     catch (e) { console.log('site appointment to-dos failed', e.message); }
+  }
+
+  // 1c. Install date checks: read customers' replies (email and text) to "does this date suit?". A confirmed date is
+  //     recorded and gets the same to-dos as an install booked in the calendar. Skipped when short of time.
+  if (!first && Date.now() - started < (force ? 16000 : 5000)) {
+    try {
+      const ok = await watchInstallChecks(jobs, { deadline: started + (force ? 22000 : 8000), added });
+      if (ok.length) {
+        await saveJobs(jobs);
+        const today = melbToday(0);
+        for (const jb of ok) await installBooked(jb, today, added);   // DNSP pre-approval (Will) and stock order (Ethan)
+      }
+    } catch (e) { console.log('install date checks failed', e.message); }
   }
 
   // 2. Reminders from each job's install date:

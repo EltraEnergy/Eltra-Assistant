@@ -5,7 +5,8 @@ import { currentUser } from './util.mjs';
 import { loadPrefs, portalFor } from './prefs.mjs';
 import { loadContent, updateItem } from './content.mjs';
 import { addProposal, decide, loadImprove } from './improve.mjs';
-import { loadJobs, saveJobs, setInstall, parseDay } from './jobs.mjs';
+import { loadJobs, saveJobs, setInstall, parseDay, findJob } from './jobs.mjs';
+import { smsReady, smsProvider, smsSender, sendSms, auMobile, auMobileLocal } from './sms.mjs';
 import { SKILLS, HOOKS, VOICE_TEMPLATE, RUBRIC } from './instagram-data.mjs';
 import { humanize, detect } from './instagram.mjs';
 import { rankHooks, beatSheet, swipeFile, captionLint } from './instagram-tools.mjs';
@@ -988,7 +989,7 @@ tool({
   name: 'jobs_list', group: 'core',
   description: 'Signed jobs Eltra is tracking: customer, kit, install date (and where it came from), and which after-sale reminders have gone out (stock a week before, CES on the day, DNSP commissioning 2 weeks after).',
   input_schema: { type: 'object', properties: {} },
-  async run() { const d = await loadJobs(); return { jobs: d.list.filter((x) => !x.closed).map((x) => ({ customer: x.name, install_date: x.installDate || 'not set', set_by: x.installSource, kit: x.kit, reminders_sent: x.flags })) }; }
+  async run() { const d = await loadJobs(); return { jobs: d.list.filter((x) => !x.closed).map((x) => ({ customer: x.name, install_date: x.installDate || 'not set', set_by: x.installSource, kit: x.kit, reminders_sent: x.flags, date_check: x.dateCheck ? { proposed_date: x.dateCheck.date, status: x.dateCheck.status } : undefined })) }; }
 });
 tool({
   name: 'job_install_date', group: 'core',
@@ -998,6 +999,83 @@ tool({
     const day = parseDay(date); if (!day) throw new Error('Give the date as YYYY-MM-DD');
     const d = await loadJobs(), j = setInstall(d, customer, day, 'eltra'); await saveJobs(d);
     return { saved: { customer: j.name, install_date: j.installDate, previous: j.previousDate }, note: j.unsigned ? 'No signed job by that name yet; the date is saved and the reminders will still run.' : undefined };
+  }
+});
+
+// ---------- Install date availability check (ask the customer by email and text before the date is confirmed) ----------
+const CHECK_FIELDS = { customer: { type: 'string', description: 'customer name as on the job' }, date: { type: 'string', description: 'proposed install date, YYYY-MM-DD' }, project_id: { type: 'string', description: 'Pylon project id, from install_date_check' } };
+const checkDay = (date) => { const day = parseDay(date); if (!day) throw new Error('Give the date as YYYY-MM-DD'); return day; };
+tool({
+  name: 'install_date_check', group: 'core',
+  description: 'Step 1 of asking a customer whether a proposed install date suits them (for example "book Sarah in for Tuesday 8 December"). Looks up the customer\'s name, email, mobile and address in Pylon and the job, and returns a ready-made email and text. Then, in ONE step, call install_check_send_email (and install_check_send_sms if texts are set up and there is a mobile) so each shows its own Approve card. Use the drafts as they are unless asked to change them. Do not record the date with job_install_date yet: Eltra watches for the reply, records the date when the customer confirms, and flags declines and no-replies to Ethan.',
+  input_schema: { type: 'object', properties: CHECK_FIELDS, required: ['customer', 'date'] },
+  async run({ customer, date, project_id }) {
+    const day = checkDay(date);
+    const { draftMessages, checkOut, fmtDay } = await import('./install-check.mjs');
+    const d = await loadJobs(), job = findJob(d, customer, project_id);
+    let proj = null, note = [];
+    if (pylonReady()) {
+      const id = project_id || (job && job.projectId);
+      if (id) proj = pylonProject((await pylon('/solar_projects/' + encodeURIComponent(id))).data);
+      else {
+        const found = (await toolByName('pylon_find_projects').run({ search: customer })).projects || [];
+        proj = found.find((p) => p.signed) || found.find((p) => p.sold) || found[0] || null;
+        if (found.length > 1) note.push('Several Pylon projects matched; using ' + (proj.customer && proj.customer.name) + ' (' + proj.reference + '). Check it is the right customer.');
+      }
+    } else note.push('Pylon isn’t connected, so ask for the customer’s email and mobile.');
+    const cust = (proj && proj.customer) || {}, name = cust.name || (job && job.name) || customer;
+    if (proj && !proj.sold) note.push('This Pylon project isn’t signed yet.');
+    const mobile = auMobile(cust.phone);
+    if (cust.phone && !mobile) note.push('The phone number in Pylon (' + cust.phone + ') isn’t an Australian mobile, so no text can go.');
+    if (!cust.email) note.push('No email in Pylon for this customer.');
+    if (!smsReady()) note.push('Texts aren’t set up yet (Twilio or GoHighLevel in Netlify), so only send the email.');
+    const drafts = draftMessages({ name, day, address: proj && proj.address });
+    return {
+      customer: name, project_id: proj && proj.id, address: proj && proj.address, email: cust.email || null, mobile: mobile, mobile_display: mobile ? auMobileLocal(mobile) : null,
+      proposed_date: day, proposed_date_words: fmtDay(day), texts_ready: smsReady(), text_sender: smsReady() ? smsSender() : undefined,
+      existing_check: job ? checkOut(job.dateCheck) : null, drafts, notes: note.length ? note : undefined
+    };
+  }
+});
+tool({
+  name: 'install_check_send_email', group: 'google', action: true,
+  description: 'Step 2 (email): send the customer the install date question from the Gmail of the person you are talking to (via gmail_send, with their signature), and track it on the job so Eltra watches for the reply. Use the subject and body from install_date_check. Shows an Approve card.',
+  input_schema: { type: 'object', properties: { ...CHECK_FIELDS, to: { type: 'string', description: 'customer email' }, subject: { type: 'string' }, body: { type: 'string', description: 'plain text, ending with a sign-off like "Cheers,"' } }, required: ['customer', 'date', 'to', 'body'] },
+  async describe(i) {
+    const card = await toolByName('gmail_send').describe({ to: i.to, subject: i.subject, body: i.body });
+    return { ...card, title: 'Ask ' + i.customer + ' about their install date (email)', lines: card.lines.concat(['Eltra will watch for their reply and track it on the job.']) };
+  },
+  async run(i) {
+    const day = checkDay(i.date);
+    const sent = await toolByName('gmail_send').run({ to: i.to, subject: i.subject, body: i.body });
+    const { recordAsked } = await import('./install-check.mjs');
+    const check = await recordAsked({ customer: i.customer, projectId: i.project_id, day, via: 'email', detail: { to: i.to, threadId: sent.thread_id, messageId: sent.message_id, user: currentUser() } });
+    return { sent: true, to: i.to, check, note: 'Eltra checks for a reply every 30 minutes.' };
+  }
+});
+tool({
+  name: 'install_check_send_sms', group: 'sms', action: true,
+  description: 'Step 2 (text): send the customer a short text asking whether the proposed install date suits, and track it on the job so Eltra watches for the reply. Use the mobile and text from install_date_check. One Approve card per text.',
+  input_schema: { type: 'object', properties: { ...CHECK_FIELDS, to: { type: 'string', description: 'customer mobile' }, message: { type: 'string' }, email: { type: 'string', description: 'customer email, used if a GoHighLevel contact has to be made' } }, required: ['customer', 'date', 'to', 'message'] },
+  async describe(i) {
+    const ok = auMobile(i.to);
+    return { title: 'Ask ' + i.customer + ' about their install date (text)', lines: ['To: ' + (ok ? auMobileLocal(ok) : i.to + ' (not an Australian mobile, so this will fail)'), 'From: ' + smsSender()].concat(smsProvider() === 'ghl' ? ['Uses their GoHighLevel contact (made if they don’t have one).'] : [], ['Eltra will watch for their reply and track it on the job.']), preview: i.message };
+  },
+  async run(i) {
+    const day = checkDay(i.date);
+    const sent = await sendSms({ to: i.to, body: i.message, name: i.customer, email: i.email });
+    const { recordAsked } = await import('./install-check.mjs');
+    const check = await recordAsked({ customer: i.customer, projectId: i.project_id, day, via: 'sms', detail: { provider: sent.provider, to: sent.to, id: sent.id, conversationId: sent.conversationId, contactId: sent.contactId } });
+    return { sent: true, to: sent.to, check };
+  }
+});
+tool({
+  name: 'install_check_update', group: 'core',
+  description: 'Set the answer to an install date check by hand, when Will or Ethan says the customer has answered some other way (rang, told them on site) or the check is no longer needed. outcome confirmed also records the install date (no need to call job_install_date). other_date: put their suggested day in suggested_date.',
+  input_schema: { type: 'object', properties: { customer: { type: 'string' }, outcome: { type: 'string', enum: ['confirmed', 'declined', 'other_date', 'cancelled'] }, suggested_date: { type: 'string' }, note: { type: 'string', description: 'what the customer said, in a few words' } }, required: ['customer', 'outcome'] },
+  async run({ customer, outcome, suggested_date, note }) {
+    const { settleCheck } = await import('./install-check.mjs');
+    return settleCheck({ customer, outcome, suggested: suggested_date ? parseDay(suggested_date) : undefined, note });
   }
 });
 
@@ -1030,6 +1108,6 @@ tool({
 
 // Tools available right now (only the systems that are set up)
 export function activeTools() {
-  return T.filter((t) => t.group === 'google' ? !!process.env.GOOGLE_CLIENT_ID : t.group === 'ghl' ? ghlReady() : t.group === 'sm8' ? sm8Ready() : t.group === 'pylon' ? pylonReady() : t.group === 'instagram' ? igSetUp() : true);
+  return T.filter((t) => t.group === 'google' ? !!process.env.GOOGLE_CLIENT_ID : t.group === 'ghl' ? ghlReady() : t.group === 'sm8' ? sm8Ready() : t.group === 'pylon' ? pylonReady() : t.group === 'instagram' ? igSetUp() : t.group === 'sms' ? smsReady() : true);
 }
 export const toolByName = (n) => T.find((t) => t.name === n);
