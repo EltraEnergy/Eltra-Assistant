@@ -9,6 +9,8 @@
 //    proposal to-do or Pylon project is flagged in Will's brief
 //  • an install date check (customer asked by email/text if a date suits) → reads their reply: confirmed records the date,
 //    a decline or other day is flagged to Ethan, no reply in 2 days → a follow-up to-do for Ethan (see install-check.mjs)
+//  • each morning, installs whose day has arrived (Eltra's jobs + Ethan's calendar) → "Send invoice to <customer>" and
+//    "Work out the GST on the <customer> job" for Ethan (Accounts, due on the install day, never doubled)
 //  • every Monday morning → "Do payroll", every Saturday morning → "Do ServiceM8" (Ethan, Accounts, due that day)
 // Runs on a schedule (functions/automations.mjs) and whenever the dashboard loads the to-do list (at most every 15 min).
 import { store, runAs, melbToday } from './util.mjs';
@@ -337,6 +339,137 @@ export async function siteMissedBrief() {
     '. Flag these to Will in his morning brief and offer to add the proposal to-dos.';
 }
 
+// ---- Installs done → invoice and GST to-dos for Ethan ----
+// Once each morning, list the installs from Eltra's jobs AND Ethan's Google Calendar ("<customer> Install",
+// "Install - <customer>", "… (Day 1)" / "(Day 2)"; sales appointments, AWAY and HOLDs are skipped). The same customer
+// is merged into one install, on the last day of a multi-day job. For each install whose day is today or has passed
+// (looking back INV_LOOKBACK days), Ethan gets "Send invoice to <customer>" and "Work out the GST on the <customer> job"
+// in Accounts, due on the install day, unless one is already on the list (ticked off ones count) or was added before.
+// A calendar install Eltra has no job for gets its date recorded (as job_install_date would), so the stock, CES and
+// commissioning reminders run. An install event with no clear customer name gets one "confirm" to-do for Ethan.
+const INV_LOOKBACK = 14, INV_AHEAD = 30, INV_SECTION = 'Accounts';
+const invoiceText = (n) => 'Send invoice to ' + n;
+const gstText = (n) => 'Work out the GST on the ' + n + ' job';
+const NOT_INSTALL = /\b(sales|quote|quoting|consult\w*|assessment|appointment|site visit|in[- ]?home|away|hold|call|phone|meeting)\b/i;
+const CREW = /^(will|ethan|team|crew|eltra|eltra energy)(\s*(&|and|\+|,)\s*(will|ethan|team|crew))*$/i;
+const KIT = /\b\d+(\.\d+)?\s*(k?wh?|kva|panels?)\b|\b(battery|batteries|solar|panels?|inverter|sigenergy|tesla|powerwall|fronius|sungrow|goodwe|byd|alpha ?ess|enphase|jinko|trina|aiko|ev charger|charger|upgrade|system|kit)\b/i;
+const CUST_NAME = /^\p{L}[\p{L}'. &-]{0,58}\p{L}$/u;
+// The customer from an install event title: strips "Install", "(Day 1)", kit descriptions in brackets or after a dash
+// and "- Will & Ethan". → { name } (name '' when something is left but it isn't clearly a name), or null if nothing is.
+export function installCustomer(title) {
+  const t = String(title || '')
+    .replace(/\([^)]*\)|\[[^\]]*\]/g, ' ')                                  // (Day 1), (27kWh Sigenergy battery)
+    .replace(/\bday\s*\d+(\s*(of|\/)\s*\d+)?\b/gi, ' ')
+    .replace(/\binstall(ation)?s?\b/gi, ' | ');
+  const parts = t.split(/\s*[|:,+–—]\s*|\s+-\s*|\s*-\s+|^\s*-|-\s*$/).map((x) => (x || '').replace(/\s+/g, ' ').trim()).filter(Boolean)
+    .filter((x) => !CREW.test(x) && !KIT.test(x));
+  const left = parts.join(' ').replace(/\s+/g, ' ').trim();
+  if (!left) return null;
+  const words = left.split(' ');
+  const ok = CUST_NAME.test(left) && words.length <= 5 && !/\d/.test(left) && !/^(tbc|tba|customer|client|job|new|the)$/i.test(left);
+  return { name: ok ? left : '', left };
+}
+const melbDayOf = (x) => (x && (x.date || (x.dateTime && new Date(x.dateTime).toLocaleDateString('en-CA', { timeZone: 'Australia/Melbourne' })))) || '';
+// the last day an event covers (all-day events end the day after)
+function lastDayOf(e) {
+  const first = melbDayOf(e.start);
+  let last = '';
+  if (e.end && e.end.date) last = new Date(Date.parse(e.end.date + 'T12:00:00Z') - 864e5).toISOString().slice(0, 10);
+  else if (e.end && e.end.dateTime) last = new Date(Date.parse(e.end.dateTime) - 60000).toLocaleDateString('en-CA', { timeZone: 'Australia/Melbourne' });
+  return last && last > first ? last : first;
+}
+// a to-do (any section, ticked or not) that already covers this customer: kind = /invoic/ or /gst/
+function coveredBy(items, re, kind, name) {
+  const key = normName(name), words = key.split(' ').filter((w) => w.length >= 2);
+  return items.find((t) => {
+    if (t.meta && t.meta.kind === kind && normName(t.meta.customer) === key) return true;
+    if (!re.test(t.text || '')) return false;
+    const ref = normName(String(t.ref || '').replace(/\s*·\s*auto\s*$/i, ''));
+    if (ref.length >= 3 && (ref === key || key.includes(ref) || ref.includes(key))) return true;
+    const hay = ' ' + normName((t.text || '') + ' ' + (t.ref || '')) + ' ';
+    return words.length > 0 && words.every((w) => hay.includes(' ' + w + ' '));
+  }) || null;
+}
+async function installInvoiceCheck(s, jobs, signedList, added) {
+  const today = melbToday(0), from = melbToday(-INV_LOOKBACK), installs = new Map(), unclear = new Map();
+  s.instInv = s.instInv || {};
+  // the Pylon name for a cleaned-up name: a signed job first, otherwise the name as it is
+  const proper = (n) => {
+    const m = signedMatch(signedList, jobs, n);
+    if (m) return { name: m.name, job: findJob(jobs, m.name, m.projectId) };
+    return { name: n, job: findJob(jobs, n) };
+  };
+  const put = (name, day, src, job) => {
+    const k = normName(name); if (!k || !day) return;
+    const x = installs.get(k);
+    if (!x) installs.set(k, { name, day, src: [src], job });
+    else { if (day > x.day) x.day = day; if (!x.src.includes(src)) x.src.push(src); x.job = x.job || job; }
+  };
+  // 1. Eltra's jobs (future ones too, so a multi-day job isn't counted as done on its first day)
+  for (const j of jobs.list) {
+    if (!j.installDate || j.closed || j.installDate < from) continue;
+    if (j.projectId && !j.unsigned) { put(j.name, j.installDate, 'jobs', j); continue; }
+    const c = installCustomer(j.name);
+    if (c && c.name) { const p = proper(c.name); put(p.name, j.installDate, 'jobs', p.job || j); }
+  }
+  // 2. Ethan's Google Calendar
+  let cal = false;
+  await runAs('ethan', async () => {
+    const gs = await googleStatus().catch(() => ({}));
+    if (!gs.connected) return;
+    const q = new URLSearchParams({ q: 'install', singleEvents: 'true', orderBy: 'startTime', timeMin: new Date(Date.now() - (INV_LOOKBACK + 1) * 864e5).toISOString(), timeMax: new Date(Date.now() + INV_AHEAD * 864e5).toISOString(), maxResults: '150' });
+    const ev = await g(CAL + '/events?' + q);
+    cal = true;
+    for (const e of ev.items || []) {
+      const title = String(e.summary || '').trim();
+      if (!/\binstall/i.test(title) || isHold(title) || NOT_INSTALL.test(title) || e.status === 'cancelled') continue;
+      if (e.eventType && e.eventType !== 'default') continue;                                   // out of office etc.
+      if ((e.attendees || []).some((a) => a.self && a.responseStatus === 'declined')) continue;
+      const day = lastDayOf(e); if (!day) continue;
+      const c = installCustomer(title);
+      if (!c) continue;                                                                           // no customer name at all
+      if (!c.name) {
+        const k = normName(c.left), x = unclear.get(k);
+        if (!x) unclear.set(k, { title: title.replace(/\s*\(day\s*\d+[^)]*\)\s*/gi, ' ').trim(), day, eventId: e.id });
+        else if (day > x.day) x.day = day;
+        continue;
+      }
+      const p = proper(c.name);
+      put(p.name, day, 'calendar', p.job);
+    }
+  }).catch((err) => console.log('install invoice check: Ethan’s calendar failed', err.message));
+  // 3. a calendar install Eltra has no job for: record its install date so the stock, CES and commissioning reminders run
+  for (const x of installs.values()) {
+    if (x.job || !x.src.includes('calendar')) continue;
+    x.job = setInstall(jobs, x.name, x.day, 'calendar');
+    console.log('install date recorded from Ethan’s calendar:', x.name, x.day);
+  }
+  // 4. invoice and GST to-dos for installs whose (last) day has arrived
+  const todos = await loadTodos(), fmt = (d) => new Date(d + 'T12:00:00Z').toLocaleDateString('en-AU', { weekday: 'short', day: 'numeric', month: 'short' });
+  for (const [k, x] of installs) {
+    if (x.day > today || x.day < from) continue;                                                // never before the install day
+    const memo = s.instInv[k] = s.instInv[k] || {};
+    for (const step of [{ kind: 'installinvoice', re: /invoic/i, text: invoiceText }, { kind: 'installgst', re: /\bgst\b/i, text: gstText }]) {
+      if (memo[step.kind]) continue;                                                             // added before (even if since deleted)
+      const have = coveredBy(todos.items, step.re, step.kind, x.name);
+      if (have) { memo[step.kind] = have.id; continue; }
+      const t = await addTodo({ owner: 'ethan', section: INV_SECTION, text: step.text(x.name), due: x.day, ref: x.name, meta: { kind: step.kind, customer: x.name, installDate: x.day, from: x.src.join('+') } });
+      todos.items.push(t); added.push(t); memo[step.kind] = t.id;
+    }
+    memo.day = x.day;
+  }
+  // 5. install events with no clear customer name: one to-do for Ethan to confirm who it was for
+  for (const [k, x] of unclear) {
+    if (x.day > today || x.day < from) continue;
+    const mk = '?' + k;
+    if (s.instInv[mk] || todos.items.some((t) => t.meta && t.meta.kind === 'installconfirm' && t.meta.key === k)) { s.instInv[mk] = s.instInv[mk] || 'seen'; continue; }
+    const t = await addTodo({ owner: 'ethan', section: INV_SECTION, text: 'Confirm which customer the "' + x.title + '" install on ' + fmt(x.day) + ' was for, so the invoice and GST to-dos can be added', due: x.day, ref: 'Install check · auto', meta: { kind: 'installconfirm', key: k, title: x.title, day: x.day, eventId: x.eventId } });
+    todos.items.push(t); added.push(t); s.instInv[mk] = t.id;
+  }
+  const keys = Object.keys(s.instInv); keys.slice(0, Math.max(0, keys.length - 300)).forEach((key) => delete s.instInv[key]);
+  return { installs: installs.size, calendar: cal };
+}
+
 // Repeating weekly to-dos, added on the morning of the day (Melbourne time), due that day.
 const WEEKLY = [
   { key: 'payroll', day: 'Mon', owner: 'ethan', section: 'Accounts', text: 'Do payroll' },
@@ -488,6 +621,14 @@ async function automationsAsWill({ force = false } = {}) {
         for (const jb of ok) await installBooked(jb, today, added);   // DNSP pre-approval (Will) and stock order (Ethan)
       }
     } catch (e) { console.log('install date checks failed', e.message); }
+  }
+
+  // 1d. Once each morning (from 5am): installs whose day has arrived (Eltra's jobs + Ethan's calendar) → Ethan's
+  //     "Send invoice" and "Work out the GST" to-dos. Only marked done for the day when it finishes, so a run that
+  //     fails or is short of time tries again on the next one.
+  if (!first && melbWeekdayHour().hour >= 5 && s.instInvDay !== melbToday(0) && Date.now() - started < (force ? 18000 : 5000)) {
+    try { const r = await installInvoiceCheck(s, jobs, signedList, added); s.instInvDay = melbToday(0); console.log('install invoice check', JSON.stringify(r)); }
+    catch (e) { console.log('install invoice check failed', e.message); }
   }
 
   // 2. Reminders from each job's install date:
