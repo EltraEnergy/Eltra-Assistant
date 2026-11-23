@@ -923,6 +923,19 @@ tool({
   input_schema: { type: 'object', properties: { slides: { type: 'array', items: { type: 'object', properties: { heading: { type: 'string' }, body: { type: 'string' } }, required: ['heading'] }, description: 'first is the cover, last is usually the ask' } }, required: ['slides'] },
   async run({ slides }) { const s = (slides || []).slice(0, 10).map((x) => ({ heading: String(x.heading || '').slice(0, 120), body: String(x.body || '').slice(0, 300) })); return { carousel: { slides: s }, note: 'The dashboard shows the slides with a Download button. Tell Ethan they are ready.' }; }
 });
+const WALLPAPER_SIZES = ['phone', 'phone_1080', 'desktop', 'desktop_4k'];
+tool({
+  name: 'brand_wallpaper', group: 'core',
+  description: 'Make an Eltra Energy branded wallpaper (blue background, white logo, optional short tagline) in one or more sizes: phone = 1170×2532 (iPhone), phone_1080 = 1080×1920 (Android/older phones), desktop = 1920×1080, desktop_4k = 3840×2160. The logo and tagline are kept clear of the clock at the top and the dock/lock screen buttons at the bottom. The dashboard shows a preview card with a Save button for each size. Leave sizes out to make all four.',
+  input_schema: { type: 'object', properties: {
+    sizes: { type: 'array', items: { type: 'string', enum: WALLPAPER_SIZES }, description: 'which sizes to make; default all four' },
+    tagline: { type: 'string', description: 'optional short line under the logo (a few words, under 60 characters)' }
+  } },
+  async run({ sizes, tagline }) {
+    const s = [...new Set((Array.isArray(sizes) ? sizes : []).filter((x) => WALLPAPER_SIZES.includes(x)))];
+    return { wallpaper: { sizes: s.length ? s : WALLPAPER_SIZES, tagline: String(tagline || '').replace(/\s+/g, ' ').trim().slice(0, 60) }, note: 'The dashboard shows the wallpaper with a Save button for each size. Tell them it is ready.' };
+  }
+});
 tool({
   name: 'instagram_voice', group: 'core',
   description: 'Read or save Eltra Energy\'s Instagram voice (who we are, how we sound, words we use and avoid, positions, off-limits topics, proof we can use, the call to action). Every Instagram skill uses it. To save, pass the full filled-in text.',
