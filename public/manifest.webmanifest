@@ -1,5 +1,6 @@
 {
-  "name": "Eltra Today",
+  "id": "/",
+  "name": "Eltra",
   "short_name": "Eltra",
   "description": "Eltra Energy's daily dashboard and assistant",
   "start_url": "/",
@@ -10,19 +11,19 @@
   "theme_color": "#1F6FE0",
   "icons": [
     {
-      "src": "icon-192.png",
+      "src": "/icon-192.png",
       "sizes": "192x192",
       "type": "image/png",
       "purpose": "any"
     },
     {
-      "src": "icon-512.png",
+      "src": "/icon-512.png",
       "sizes": "512x512",
       "type": "image/png",
       "purpose": "any"
     },
     {
-      "src": "icon-maskable-512.png",
+      "src": "/icon-maskable-512.png",
       "sizes": "512x512",
       "type": "image/png",
       "purpose": "maskable"
