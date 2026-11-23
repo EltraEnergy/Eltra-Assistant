@@ -163,7 +163,7 @@
   var CHAT = 'eltra-hud-chat-v1';
   var chat = load(CHAT, null) || { messages: [], approvals: null, results: {}, decided: {} };
   var busy = false, lastError = null, steps = 0, aborted = false;
-  var LABELS = { gmail_search: 'Searching email', gmail_read: 'Reading email', gmail_create_draft: 'Drafting email', gmail_send_draft: 'Sending email', gmail_send: 'Sending email', gmail_archive: 'Archiving email', gmail_save_attachments: 'Saving attachments', calendar_events: 'Checking calendar', calendar_create_event: 'Adding to calendar', calendar_update_event: 'Updating calendar', calendar_delete_event: 'Removing from calendar', drive_search: 'Searching Drive', sheets_read: 'Reading sheet', pylon_find_projects: 'Checking Pylon', pylon_project: 'Opening Pylon project', pylon_create_project: 'Setting up Pylon project', pylon_new_project_link: 'Making Pylon link', drive_read_file: 'Reading file', todo_list: 'Checking to-dos', todo_add: 'Adding to-do', todo_update: 'Updating to-do', dnsp_task_pack: 'Preparing the DNSP task', read_document: 'Reading document', instagram_skill: 'Loading Instagram guide', instagram_humanize: 'Polishing the post', instagram_voice: 'Checking our Instagram voice', instagram_hooks: 'Scoring hooks', instagram_beats: 'Timing the script', instagram_swipe: 'Ranking what works', instagram_carousel: 'Making carousel slides', instagram_post: 'Posting to Instagram', instagram_finish_post: 'Finishing the post', instagram_insights: 'Checking Instagram numbers', instagram_comments: 'Reading comments', instagram_reply: 'Replying on Instagram', instagram_hide_comment: 'Hiding comment', instagram_research: 'Researching accounts', instagram_research_in_browser: 'Preparing the research task', content_schedule: 'Checking the schedule', content_edit: 'Updating the schedule', suggest_improvement: 'Noting an improvement', jobs_list: 'Checking jobs', learn_rule: 'Learning a rule', learned_rules: 'Checking what I’ve learned', unlearn_rule: 'Forgetting a rule', job_install_date: 'Saving the install date', install_date_check: 'Looking up the customer', install_check_send_email: 'Emailing the customer', install_check_send_sms: 'Texting the customer', install_check_update: 'Updating the install check', drive_list_folder: 'Opening folder', drive_move: 'Moving files', drive_create_folder: 'Creating folder', drive_rename: 'Renaming', ghl_pipelines: 'Checking pipeline', ghl_search_opportunities: 'Looking up leads', ghl_search_contacts: 'Looking up contacts', ghl_move_opportunity: 'Updating lead', ghl_add_note: 'Adding note', ghl_add_task: 'Adding task', sm8_jobs: 'Looking up jobs', sm8_schedule: 'Checking schedule', sm8_add_job_note: 'Adding job note', sm8_create_job: 'Creating job' };
+  var LABELS = { gmail_search: 'Searching email', gmail_read: 'Reading email', gmail_create_draft: 'Drafting email', gmail_send_draft: 'Sending email', gmail_send: 'Sending email', gmail_archive: 'Archiving email', gmail_save_attachments: 'Saving attachments', calendar_events: 'Checking calendar', calendar_create_event: 'Adding to calendar', calendar_update_event: 'Updating calendar', calendar_delete_event: 'Removing from calendar', drive_search: 'Searching Drive', sheets_read: 'Reading sheet', pylon_find_projects: 'Checking Pylon', pylon_project: 'Opening Pylon project', pylon_create_project: 'Setting up Pylon project', pylon_new_project_link: 'Making Pylon link', drive_read_file: 'Reading file', todo_list: 'Checking to-dos', todo_add: 'Adding to-do', todo_update: 'Updating to-do', dnsp_task_pack: 'Preparing the DNSP task', read_document: 'Reading document', instagram_skill: 'Loading Instagram guide', instagram_humanize: 'Polishing the post', instagram_voice: 'Checking our Instagram voice', instagram_hooks: 'Scoring hooks', instagram_beats: 'Timing the script', instagram_swipe: 'Ranking what works', instagram_carousel: 'Making carousel slides', brand_wallpaper: 'Making wallpaper', instagram_post: 'Posting to Instagram', instagram_finish_post: 'Finishing the post', instagram_insights: 'Checking Instagram numbers', instagram_comments: 'Reading comments', instagram_reply: 'Replying on Instagram', instagram_hide_comment: 'Hiding comment', instagram_research: 'Researching accounts', instagram_research_in_browser: 'Preparing the research task', content_schedule: 'Checking the schedule', content_edit: 'Updating the schedule', suggest_improvement: 'Noting an improvement', jobs_list: 'Checking jobs', learn_rule: 'Learning a rule', learned_rules: 'Checking what I’ve learned', unlearn_rule: 'Forgetting a rule', job_install_date: 'Saving the install date', install_date_check: 'Looking up the customer', install_check_send_email: 'Emailing the customer', install_check_send_sms: 'Texting the customer', install_check_update: 'Updating the install check', drive_list_folder: 'Opening folder', drive_move: 'Moving files', drive_create_folder: 'Creating folder', drive_rename: 'Renaming', ghl_pipelines: 'Checking pipeline', ghl_search_opportunities: 'Looking up leads', ghl_search_contacts: 'Looking up contacts', ghl_move_opportunity: 'Updating lead', ghl_add_note: 'Adding note', ghl_add_task: 'Adding task', sm8_jobs: 'Looking up jobs', sm8_schedule: 'Checking schedule', sm8_add_job_note: 'Adding job note', sm8_create_job: 'Creating job' };
   function persist() { save(CHAT, chat); }
   function md(t) {
     var out = '', inList = false;
@@ -177,9 +177,14 @@
   }
   // Eltra's own bookkeeping notes about searches (kept for her, not shown or read out)
   function isNote(t) { return /^\[(Searched the web|Search results used|Sources cited)/.test(String(t || '').trim()); }
-  var taskCards = [], carousels = [];
+  var taskCards = [], carousels = [], wallpapers = [];
+  // wallpaper sizes the brand_wallpaper tool can ask for (drawn by drawWallpaper below)
+  var WP_SIZES = {
+    phone: { w: 1170, h: 2532, label: 'iPhone' }, phone_1080: { w: 1080, h: 1920, label: 'Phone' },
+    desktop: { w: 1920, h: 1080, label: 'Desktop' }, desktop_4k: { w: 3840, h: 2160, label: 'Desktop 4K' }
+  };
   function render() {
-    var h = ''; taskCards = []; carousels = [];
+    var h = ''; taskCards = []; carousels = []; wallpapers = [];
     if (!chat.messages.length) h = '<div class="empty">Ask about your day, your email, a customer or a job</div>';
     chat.messages.forEach(function (m, mi) {
       if (m.role === 'user') {
@@ -206,6 +211,15 @@
               h += '<div class="card task"><div class="ch">Carousel · ' + cs.slides.length + ' slides</div><div class="slides">' + cs.slides.map(function (sl, si) { return '<canvas class="slide" width="216" height="270" data-car="' + ck + '" data-slide="' + si + '" aria-label="Slide ' + (si + 1) + ': ' + esc(sl.heading) + '"></canvas>'; }).join('') + '</div><div class="row"><button type="button" class="btn" data-cardl="' + ck + '">Save slide images</button>' + (igConnected() ? '<button type="button" class="btn no" data-carpost="' + ck + '">Post to Instagram</button>' : '') + '</div></div>';
             }
             return;
+          }
+          if (c.type === 'tool_result' && typeof c.content === 'string' && c.content.indexOf('"wallpaper"') >= 0) {
+            var wp; try { wp = JSON.parse(c.content).wallpaper; } catch (e) { wp = null; }
+            if (wp && wp.sizes) wp.sizes = wp.sizes.filter(function (k) { return WP_SIZES[k]; });
+            if (wp && wp.sizes && wp.sizes.length) {
+              var wk = wallpapers.push(wp) - 1;
+              h += '<div class="card task"><div class="ch">Wallpaper' + (wp.tagline ? ' · ' + esc(wp.tagline) : '') + '</div><div class="slides">' + wp.sizes.map(function (k) { var z = WP_SIZES[k], sc = 270 / Math.max(z.w, z.h); return '<canvas class="wp" width="' + Math.round(z.w * sc) + '" height="' + Math.round(z.h * sc) + '" data-wp="' + wk + '" data-wpsize="' + k + '" aria-label="' + esc(z.label) + ' wallpaper preview"></canvas>'; }).join('') + '</div><div class="row">' + wp.sizes.map(function (k) { var z = WP_SIZES[k]; return '<button type="button" class="btn" data-wpdl="' + wk + '" data-wpsize="' + k + '">Save ' + esc(z.label) + ' ' + z.w + '×' + z.h + '</button>'; }).join('') + '</div></div>';
+              return;
+            }
           }
           if (c.type !== 'tool_result' || typeof c.content !== 'string' || c.content.indexOf('"browser_task"') < 0) return;
           var bt; try { bt = JSON.parse(c.content).browser_task; } catch (e) { return; }
@@ -238,7 +252,8 @@
     if (busy) h += '<div class="act wait">Working…</div>';
     if (lastError) h += '<div class="m err"><span>' + esc(lastError) + '</span><button type="button" class="copy" id="retry">Try again</button></div>';
     $('log').innerHTML = h; $('log').scrollTop = $('log').scrollHeight;
-    var drawThumbs = function () { document.querySelectorAll('#log canvas.slide').forEach(function (cv) { drawSlide(cv, carousels[+cv.dataset.car], +cv.dataset.slide, 0.2); }); };
+    var drawThumbs = function () { document.querySelectorAll('#log canvas.slide').forEach(function (cv) { drawSlide(cv, carousels[+cv.dataset.car], +cv.dataset.slide, 0.2); });
+      document.querySelectorAll('#log canvas.wp').forEach(function (cv) { var z = WP_SIZES[cv.dataset.wpsize]; drawWallpaper(cv, wallpapers[+cv.dataset.wp], cv.dataset.wpsize, cv.width / z.w); }); };
     drawThumbs(); if (document.fonts && document.fonts.ready) document.fonts.ready.then(drawThumbs);
     var r = $('retry'); if (r) r.onclick = function () { lastError = null; step({}); };
     $('sendBtn').disabled = busy; $('stop').hidden = !busy;
@@ -255,6 +270,7 @@
       return;
     }
     var dl = e.target.closest('[data-cardl]'); if (dl) { saveCarousel(carousels[+dl.dataset.cardl], dl); return; }
+    var wdl = e.target.closest('[data-wpdl]'); if (wdl) { saveWallpaper(wallpapers[+wdl.dataset.wpdl], wdl.dataset.wpsize, wdl); return; }
     var cpb = e.target.closest('[data-carpost]'); if (cpb) { postCarousel(carousels[+cpb.dataset.carpost], cpb); return; }
     var cp = e.target.closest('[data-taskcopy]');
     if (cp) {
@@ -962,10 +978,47 @@
   }
   function saveCarouselNow(car, btn) {
     var files = car.slides.map(function (sl, i) { var cv = document.createElement('canvas'); cv.width = 1080; cv.height = 1350; drawSlide(cv, car, i, 1); return cv; });
-    Promise.all(files.map(function (cv, i) { return new Promise(function (ok) { cv.toBlob(function (b) { ok(new File([b], 'eltra-slide-' + (i + 1) + '.png', { type: 'image/png' })); }, 'image/png'); }); })).then(function (fs) {
-      if (navigator.canShare && navigator.canShare({ files: fs })) { navigator.share({ files: fs }).catch(function () {}); return; }   // iPhone/iPad: "Save Images" puts them in Photos
-      fs.forEach(function (f, i) { setTimeout(function () { var a = document.createElement('a'); a.href = URL.createObjectURL(f); a.download = f.name; document.body.appendChild(a); a.click(); a.remove(); }, i * 250); });
-      var old = btn.textContent; btn.textContent = 'Saved ' + fs.length + ' images'; setTimeout(function () { btn.textContent = old; }, 2500);
+    Promise.all(files.map(function (cv, i) { return new Promise(function (ok) { cv.toBlob(function (b) { ok(new File([b], 'eltra-slide-' + (i + 1) + '.png', { type: 'image/png' })); }, 'image/png'); }); })).then(function (fs) { saveFiles(fs, btn); });
+  }
+  function saveFiles(fs, btn) {
+    if (navigator.canShare && navigator.canShare({ files: fs })) { navigator.share({ files: fs }).catch(function () {}); return; }   // iPhone/iPad: "Save Image(s)" puts them in Photos
+    fs.forEach(function (f, i) { setTimeout(function () { var a = document.createElement('a'); a.href = URL.createObjectURL(f); a.download = f.name; document.body.appendChild(a); a.click(); a.remove(); }, i * 250); });
+    var old = btn.textContent; btn.textContent = fs.length > 1 ? 'Saved ' + fs.length + ' images' : 'Saved'; setTimeout(function () { btn.textContent = old; }, 2500);
+  }
+
+  // ================= branded wallpapers (phone and desktop) =================
+  // Logo and tagline sit in a middle band, clear of the clock up top and the dock / lock screen buttons at the bottom.
+  function drawWallpaper(cv, wp, key, scale) {
+    var z = WP_SIZES[key], W = z.w, H = z.h, tall = H > W, u = Math.min(W, H), ctx = cv.getContext('2d');
+    ctx.setTransform(scale, 0, 0, scale, 0, 0); ctx.textAlign = 'left';
+    var g = ctx.createLinearGradient(0, 0, W * 0.4, H); g.addColorStop(0, '#2C80F0'); g.addColorStop(0.55, '#1F6FE0'); g.addColorStop(1, '#14489A');
+    ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
+    // soft sun glow and rings in a corner (background only, low contrast)
+    var cx = W * (tall ? 0.85 : 0.88), cy = H * (tall ? 0.12 : 0.16), rg = ctx.createRadialGradient(cx, cy, 0, cx, cy, u * 0.95);
+    rg.addColorStop(0, 'rgba(255,255,255,.22)'); rg.addColorStop(1, 'rgba(255,255,255,0)'); ctx.fillStyle = rg; ctx.fillRect(0, 0, W, H);
+    ctx.strokeStyle = 'rgba(255,255,255,.07)'; ctx.lineWidth = u * 0.005;
+    for (var k = 1; k <= 5; k++) { ctx.beginPath(); ctx.arc(cx, cy, u * 0.22 * k, 0, Math.PI * 2); ctx.stroke(); }
+    // safe band: phones 36%–80% of the height (lock screen clock above, dock / torch and camera below); desktops 14%–84% (menu bar, taskbar / dock)
+    var top = H * (tall ? 0.36 : 0.14), bot = H * (tall ? 0.80 : 0.84);
+    var ready = logoImg.complete && logoImg.naturalWidth, lw = W * (tall ? 0.66 : 0.34), lh = lw * (ready ? logoImg.naturalHeight / logoImg.naturalWidth : 125 / 640);
+    var t = null, gap = lh * 0.5, lineH = 1.2, font = '600 {s}px "Barlow Semi Condensed", Barlow, Arial, sans-serif';
+    if (wp.tagline) { var start = Math.round(W * (tall ? 0.068 : 0.03)); t = fitText(ctx, wp.tagline, font, tall ? W * 0.8 : W * 0.5, (bot - top) * 0.3, start, Math.round(start * 0.6), lineH); }
+    var block = lh + (t ? gap + t.lines.length * t.size * lineH : 0), y = (top + bot) / 2 - block / 2;
+    if (ready) ctx.drawImage(logoImg, (W - lw) / 2, y, lw, lh);
+    else logoImg.addEventListener('load', function () { drawWallpaper(cv, wp, key, scale); }, { once: true });
+    if (t) {
+      y += lh + gap; ctx.fillStyle = 'rgba(255,255,255,.9)'; ctx.textBaseline = 'top'; ctx.textAlign = 'center'; ctx.font = font.replace('{s}', t.size);
+      t.lines.forEach(function (l) { ctx.fillText(l, W / 2, y); y += t.size * lineH; });
+      ctx.textAlign = 'left';
+    }
+  }
+  function saveWallpaper(wp, key, btn) {
+    var z = WP_SIZES[key]; if (!wp || !z) return;
+    var fontsReady = document.fonts && document.fonts.load ? Promise.all([document.fonts.load('600 100px "Barlow Semi Condensed"')]).catch(function () {}) : Promise.resolve();
+    var logoReady = logoImg.complete && logoImg.naturalWidth ? Promise.resolve() : new Promise(function (ok) { logoImg.addEventListener('load', ok, { once: true }); logoImg.addEventListener('error', ok, { once: true }); });
+    Promise.all([fontsReady, logoReady]).then(function () {
+      var cv = document.createElement('canvas'); cv.width = z.w; cv.height = z.h; drawWallpaper(cv, wp, key, 1);
+      cv.toBlob(function (b) { saveFiles([new File([b], 'eltra-wallpaper-' + z.w + 'x' + z.h + '.png', { type: 'image/png' })], btn); }, 'image/png');
     });
   }
 
