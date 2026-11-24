@@ -12,6 +12,9 @@ const ETHAN_WORK = /(stock|install date|booking|account|invoic|social)/i;
 // who a to-do is for: 'will', 'ethan' or 'both'
 export const ownerOf = (v) => { const x = String(v || '').toLowerCase(); return x === 'both' || x === 'everyone' || x === 'team' ? 'both' : USERS[x] ? x : x === 'me' ? currentUser() : currentUser(); };
 const str = (v, n) => String(v ?? '').trim().slice(0, n);
+// a free-text note on a to-do (what a customer said, what it's waiting on, …)
+const NOTE_MAX = 1000;
+const noteOf = (v) => String(v ?? '').replace(/\r\n?/g, '\n').trim().slice(0, NOTE_MAX);
 
 export async function loadTodos() {
   const d = (await store().get(KEY, { type: 'json' })) || {};
@@ -85,8 +88,9 @@ function pickSection(d, name, create) {
   return d.sections[0];
 }
 
-function addOne(d, { section, text, due, ref, owner, meta }) {
+function addOne(d, { section, text, due, ref, owner, meta, note }) {
   const item = { id: crypto.randomUUID().slice(0, 8), section: pickSection(d, section, true), text: str(text, 300), due: /^\d{4}-\d{2}-\d{2}$/.test(due || '') ? due : '', ref: str(ref, 200), owner: ownerOf(owner), by: currentUser(), done: false, createdAt: new Date().toISOString() };
+  if (noteOf(note)) item.note = noteOf(note);
   if (meta && typeof meta === 'object') item.meta = JSON.parse(JSON.stringify(meta, (k, v) => (typeof v === 'string' ? v.slice(0, 300) : v)));
   if (!item.text) throw new Error('A to-do needs some text');
   d.items.push(item); return item;
@@ -97,6 +101,9 @@ function updateOne(d, id, patch) {
   if (patch.text !== undefined) it.text = str(patch.text, 300) || it.text;
   if (patch.section !== undefined) it.section = pickSection(d, patch.section, true);
   if (patch.due !== undefined) it.due = /^\d{4}-\d{2}-\d{2}$/.test(patch.due || '') ? patch.due : '';
+  // note: replaces the note ('' clears it); append_note: adds a new line to the end of it
+  if (patch.note !== undefined && patch.note !== null) { const n = noteOf(patch.note); if (n) it.note = n; else delete it.note; }
+  if (patch.append_note) { const a = noteOf(patch.append_note); if (a) it.note = noteOf(it.note ? it.note + '\n' + a : a); }
   if (patch.owner !== undefined) { it.owner = ownerOf(patch.owner); it.ownerSet = true; }
   if (patch.done !== undefined) {
     const was = !!it.done;
@@ -128,7 +135,7 @@ export const updateTodo = (id, patch) => serial(async () => { const d = await lo
 
 // Several at once: apply each in turn to one copy of the list, save once, then read it back
 // to check every change actually stuck. Returns one result per item, in order: { ok, item } or { ok: false, error }.
-const same = (a, b) => ['text', 'section', 'due', 'done'].every((k) => (a[k] ?? '') === (b[k] ?? ''));
+const same = (a, b) => ['text', 'section', 'due', 'done', 'note'].every((k) => (a[k] ?? '') === (b[k] ?? ''));
 async function batch(list, apply) {
   return serial(async () => {
     const d = await loadTodos();
