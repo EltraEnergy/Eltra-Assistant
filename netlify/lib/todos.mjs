@@ -15,6 +15,17 @@ const str = (v, n) => String(v ?? '').trim().slice(0, n);
 // a free-text note on a to-do (what a customer said, what it's waiting on, …)
 const NOTE_MAX = 1000;
 const noteOf = (v) => String(v ?? '').replace(/\r\n?/g, '\n').trim().slice(0, NOTE_MAX);
+// urgency (Will asked for this): 'red' (urgent), 'yellow' (soon), 'green' (can wait), or '' for no rating
+export const URGENCY = ['red', 'yellow', 'green'];
+const urgencyOf = (v) => { const x = String(v ?? '').trim().toLowerCase(); return URGENCY.includes(x) ? x : ''; };
+// what the dashboard shows: the set urgency, else from the due date (overdue/today red, within 3 days yellow, later green)
+export function urgencyFor(x, today) {
+  if (urgencyOf(x.urgency)) return urgencyOf(x.urgency);
+  if (!x.due) return '';
+  const t = today || new Intl.DateTimeFormat('en-CA', { timeZone: 'Australia/Melbourne' }).format(new Date());
+  const days = Math.round((Date.parse(x.due + 'T00:00:00Z') - Date.parse(t + 'T00:00:00Z')) / 864e5);
+  return days <= 0 ? 'red' : days <= 3 ? 'yellow' : 'green';
+}
 
 export async function loadTodos() {
   const d = (await store().get(KEY, { type: 'json' })) || {};
@@ -88,9 +99,10 @@ function pickSection(d, name, create) {
   return d.sections[0];
 }
 
-function addOne(d, { section, text, due, ref, owner, meta, note }) {
+function addOne(d, { section, text, due, ref, owner, meta, note, urgency }) {
   const item = { id: crypto.randomUUID().slice(0, 8), section: pickSection(d, section, true), text: str(text, 300), due: /^\d{4}-\d{2}-\d{2}$/.test(due || '') ? due : '', ref: str(ref, 200), owner: ownerOf(owner), by: currentUser(), done: false, createdAt: new Date().toISOString() };
   if (noteOf(note)) item.note = noteOf(note);
+  if (urgencyOf(urgency)) item.urgency = urgencyOf(urgency);
   if (meta && typeof meta === 'object') item.meta = JSON.parse(JSON.stringify(meta, (k, v) => (typeof v === 'string' ? v.slice(0, 300) : v)));
   if (!item.text) throw new Error('A to-do needs some text');
   d.items.push(item); return item;
@@ -104,6 +116,8 @@ function updateOne(d, id, patch) {
   // note: replaces the note ('' clears it); append_note: adds a new line to the end of it
   if (patch.note !== undefined && patch.note !== null) { const n = noteOf(patch.note); if (n) it.note = n; else delete it.note; }
   if (patch.append_note) { const a = noteOf(patch.append_note); if (a) it.note = noteOf(it.note ? it.note + '\n' + a : a); }
+  // urgency: red / yellow / green, or '' / 'none' to clear it
+  if (patch.urgency !== undefined && patch.urgency !== null) { const u = urgencyOf(patch.urgency); if (u) it.urgency = u; else delete it.urgency; }
   if (patch.owner !== undefined) { it.owner = ownerOf(patch.owner); it.ownerSet = true; }
   if (patch.done !== undefined) {
     const was = !!it.done;
@@ -135,7 +149,7 @@ export const updateTodo = (id, patch) => serial(async () => { const d = await lo
 
 // Several at once: apply each in turn to one copy of the list, save once, then read it back
 // to check every change actually stuck. Returns one result per item, in order: { ok, item } or { ok: false, error }.
-const same = (a, b) => ['text', 'section', 'due', 'done', 'note'].every((k) => (a[k] ?? '') === (b[k] ?? ''));
+const same = (a, b) => ['text', 'section', 'due', 'done', 'note', 'urgency'].every((k) => (a[k] ?? '') === (b[k] ?? ''));
 async function batch(list, apply) {
   return serial(async () => {
     const d = await loadTodos();

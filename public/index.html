@@ -358,6 +358,9 @@
   .tlist .tt small.tnote { white-space: pre-line; font-style: italic; margin-top: 2px; }
   .tlist li.done .tt { color: var(--dim); text-decoration: line-through; }
   .tlist li.done .tt small.tnote { text-decoration: none; }
+  /* urgency: coloured left border (red urgent, yellow soon, green can wait) */
+  .tlist li.u-red, .tlist li.u-yellow, .tlist li.u-green { border-left: 4px solid transparent; padding-left: 6px; }
+  .tlist li.u-red { border-left-color: var(--red); } .tlist li.u-yellow { border-left-color: #E0A800; } .tlist li.u-green { border-left-color: var(--green); }
   .tlist .due { font-size: 13px; font-weight: 600; color: var(--muted); white-space: nowrap; }
   .tlist .due.over { color: var(--red); } .tlist .due.today { color: var(--amber); }
   .tdraft { font: inherit; font-size: 12.5px; font-weight: 700; color: var(--blue); background: var(--blue-soft); border: 0; border-radius: 999px; padding: 4px 10px; margin-right: 6px; cursor: pointer; }

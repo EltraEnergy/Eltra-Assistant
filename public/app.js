@@ -1371,6 +1371,15 @@
     var txt = d === today ? 'Today' : d < today ? 'Overdue · ' + t.toLocaleDateString('en-AU', { day: 'numeric', month: 'short' }) : t.toLocaleDateString('en-AU', { weekday: 'short', day: 'numeric', month: 'short' });
     return { cls: cls, txt: txt };
   }
+  // urgency: the one set on the to-do (red / yellow / green), else from its due date: overdue or today red, within 3 days yellow, later green
+  var URG = { red: { rank: 0, label: 'Urgent' }, yellow: { rank: 1, label: 'Soon' }, green: { rank: 2, label: 'Can wait' } };
+  function todoUrgency(x) {
+    if (URG[x.urgency]) return x.urgency;
+    if (!x.due) return '';
+    var today = fmt(new Date(), { year: 'numeric', month: '2-digit', day: '2-digit' }).split('/').reverse().join('-');
+    var days = Math.round((Date.parse(x.due + 'T00:00:00Z') - Date.parse(today + 'T00:00:00Z')) / 864e5);
+    return days <= 0 ? 'red' : days <= 3 ? 'yellow' : 'green';
+  }
   // "Parent - Sub" sections (e.g. "DNSP - Pre approval") show under one parent tab. The stored names don't change.
   // todoTab is 'All', a section name, or '*' + parent name for a whole parent tab; todoOpen is the parent that's opened out.
   var todoOpen = '';
@@ -1441,15 +1450,18 @@
     sel.value = inTabSecs.indexOf(cur) >= 0 ? cur : todoTab !== 'All' && todoTab.charAt(0) !== '*' ? todoTab : (inTabSecs[0] || todos.sections[0]);
     var inTab = todos.items.filter(function (x) { return (todoWho === 'all' || mine(x)) && tabHas(todoTab, x); });
     $('todoWho').querySelectorAll('button').forEach(function (b) { b.setAttribute('aria-pressed', b.dataset.who === todoWho); });
-    var open = inTab.filter(function (x) { return !x.done; }).sort(function (a, b) { return (a.due || '9999') < (b.due || '9999') ? -1 : (a.due || '9999') > (b.due || '9999') ? 1 : a.createdAt < b.createdAt ? -1 : 1; });
+    // most urgent first (red, yellow, green, then no rating), then by due date, then oldest first
+    var urank = function (x) { var u = todoUrgency(x); return u ? URG[u].rank : 3; };
+    var open = inTab.filter(function (x) { return !x.done; }).sort(function (a, b) { return urank(a) - urank(b) || ((a.due || '9999') < (b.due || '9999') ? -1 : (a.due || '9999') > (b.due || '9999') ? 1 : a.createdAt < b.createdAt ? -1 : 1); });
     var done = inTab.filter(function (x) { return x.done; }).sort(function (a, b) { return (b.doneAt || '') < (a.doneAt || '') ? -1 : 1; });
     var list = $('todoList'); list.textContent = '';
     if (!open.length) { var e = document.createElement('li'); e.className = 'empty'; e.textContent = todoTab === 'All' ? 'Nothing to do. Add one above, or ask Eltra to.' : 'Nothing in ' + tabLabel(todoTab) + '.'; list.appendChild(e); }
     open.concat(showDone ? done : []).forEach(function (it) {
-      var li = document.createElement('li'); if (it.done) li.className = 'done';
+      var li = document.createElement('li'), urg = it.done ? '' : todoUrgency(it); li.className = (it.done ? 'done' : '') + (urg ? ' u-' + urg : '');
+      if (urg) li.title = URG[urg].label + (it.urgency ? '' : ' (from the due date)');
       var due = todoDueText(it.due);
       li.innerHTML = '<input type="checkbox"' + (it.done ? ' checked' : '') + ' aria-label="Done: ' + esc(it.text) + '">' +
-        '<span class="tt" role="button" tabindex="0" title="' + (it.note ? 'Edit or clear the note' : 'Add a note') + '" aria-label="' + esc(it.text) + (it.note ? '. Note: ' + esc(it.note) + '. Edit note' : '. Add a note') + '">' + esc(it.text) + '<small>' + [todoTab === 'All' ? it.section : todoTab.charAt(0) === '*' ? (secParts(it.section) || { sub: '' }).sub : '', it.ref, (it.owner && it.owner !== me.user) ? 'for ' + OWNER[it.owner] : ''].filter(Boolean).map(esc).join(' · ') + '</small>' +
+        '<span class="tt" role="button" tabindex="0" title="' + (it.note ? 'Edit or clear the note' : 'Add a note') + '" aria-label="' + (urg ? URG[urg].label + ': ' : '') + esc(it.text) + (it.note ? '. Note: ' + esc(it.note) + '. Edit note' : '. Add a note') + '">' + esc(it.text) + '<small>' + [todoTab === 'All' ? it.section : todoTab.charAt(0) === '*' ? (secParts(it.section) || { sub: '' }).sub : '', it.ref, (it.owner && it.owner !== me.user) ? 'for ' + OWNER[it.owner] : ''].filter(Boolean).map(esc).join(' · ') + '</small>' +
         (it.note ? '<small class="tnote"><span aria-hidden="true">📝</span> ' + esc(it.note) + '</small>' : '') + '</span>' +
         '<span class="due ' + (due && !it.done ? due.cls : '') + '">' + (it.meta && it.meta.kind === 'followup' && !it.done ? '<button type="button" class="tdraft" data-draft>Write email</button> ' : '') + (due ? esc(due.txt) : '') + '</span>' +
         '<button type="button" class="x" aria-label="Delete: ' + esc(it.text) + '">×</button>';
