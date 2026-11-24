@@ -6,7 +6,7 @@
 import { store, currentUser } from './util.mjs';
 import { claudeJSON } from './claude.mjs';
 import crypto from 'node:crypto';
-import { startBuild, checkBuild, makeLive, undoBuild, discardBuild, buildReady, guessTarget, isSensitive } from './codebuild.mjs';
+import { startBuild, checkBuild, makeLive, undoBuild, discardBuild, buildReady, guessTarget, isSensitive, installUpdate } from './codebuild.mjs';
 
 const KEY = 'improve';
 export async function loadImprove() {
@@ -51,6 +51,13 @@ export async function decide(id, action, by = currentUser(), opts = {}) {
   else if (action === 'done') it.status = 'live';
   else if (action === 'undo') it.status = 'proposed';
   await save(d); return it;
+}
+// an update zip Will uploaded: open the pull request and track it like a build (preview → Make it live → Undo)
+export async function addUpdate(target, files, note) {
+  const u = await installUpdate(target, files, note), now = new Date().toISOString();
+  const d = await loadImprove();
+  const it = { id: crypto.randomBytes(5).toString('hex'), kind: 'update', title: u.title, why: note ? 'Uploaded zip: ' + note : 'Uploaded zip', change: u.build.summary, source: 'upload', target, status: 'building', createdAt: now, decidedBy: currentUser(), decidedAt: now, build: u.build };
+  d.items.unshift(it); d.items = d.items.slice(0, 60); await save(d); return it;
 }
 // approved behaviour changes, added to Eltra's instructions
 export async function liveRules() {
