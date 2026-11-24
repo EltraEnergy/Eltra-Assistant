@@ -1372,7 +1372,8 @@
       var li = document.createElement('li'); if (it.done) li.className = 'done';
       var due = todoDueText(it.due);
       li.innerHTML = '<input type="checkbox"' + (it.done ? ' checked' : '') + ' aria-label="Done: ' + esc(it.text) + '">' +
-        '<span class="tt">' + esc(it.text) + '<small>' + [todoTab === 'All' ? it.section : todoTab.charAt(0) === '*' ? (secParts(it.section) || { sub: '' }).sub : '', it.ref, (it.owner && it.owner !== me.user) ? 'for ' + OWNER[it.owner] : ''].filter(Boolean).map(esc).join(' · ') + '</small></span>' +
+        '<span class="tt" role="button" tabindex="0" title="' + (it.note ? 'Edit or clear the note' : 'Add a note') + '" aria-label="' + esc(it.text) + (it.note ? '. Note: ' + esc(it.note) + '. Edit note' : '. Add a note') + '">' + esc(it.text) + '<small>' + [todoTab === 'All' ? it.section : todoTab.charAt(0) === '*' ? (secParts(it.section) || { sub: '' }).sub : '', it.ref, (it.owner && it.owner !== me.user) ? 'for ' + OWNER[it.owner] : ''].filter(Boolean).map(esc).join(' · ') + '</small>' +
+        (it.note ? '<small class="tnote"><span aria-hidden="true">📝</span> ' + esc(it.note) + '</small>' : '') + '</span>' +
         '<span class="due ' + (due && !it.done ? due.cls : '') + '">' + (it.meta && it.meta.kind === 'followup' && !it.done ? '<button type="button" class="tdraft" data-draft>Write email</button> ' : '') + (due ? esc(due.txt) : '') + '</span>' +
         '<button type="button" class="x" aria-label="Delete: ' + esc(it.text) + '">×</button>';
       li.querySelector('input').onchange = function (ev) {
@@ -1386,6 +1387,14 @@
           .catch(function (e) { cb.checked = false; alert(e.message); });
       };
       li.querySelector('.x').onclick = function () { todoCall({ action: 'delete', id: it.id }); };
+      // click (or Enter on) a to-do to add, edit or clear its note
+      var tt = li.querySelector('.tt');
+      tt.onclick = function () {
+        var v = prompt('Note for "' + it.text + '" (leave empty to clear it):', it.note || '');
+        if (v === null || v.trim() === (it.note || '')) return;
+        todoCall({ action: 'update', id: it.id, note: v.trim() });
+      };
+      tt.onkeydown = function (ev) { if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); tt.onclick(); } };
       var dbtn = li.querySelector('[data-draft]');
       if (dbtn) dbtn.onclick = function () {
         // the follow-up email is written now, in front of you, and is only sent once you approve it (no Gmail draft)
