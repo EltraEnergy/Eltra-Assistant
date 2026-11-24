@@ -819,7 +819,7 @@ tool({
 // ---------- DNSP browser tasks: pre-approval and commissioning (filled in by Claude in Chrome) ----------
 tool({
   name: 'dnsp_task_pack', group: 'pylon',
-  description: 'Prepare a DNSP portal task for a Pylon project, ready for Will to hand to Claude in Chrome: task "preapproval" (solar/battery pre-approval application) or "commissioning" (notify the distributor the system is installed and the inverter is commissioned). Pulls the customer, site, NMI, meter, retailer, phases and system (signed design, else primary) from Pylon, lists anything missing, and returns the Chrome instruction plus the distributor portal link. Before calling it, gather the details yourself: find the customer\'s power bill (their Customer Quotes folder in Drive, or an email from them) and read it with read_document kind "bill" for NMI, meter number, retailer and distributor; for commissioning also find the CES (Drive or email) and read it with kind "ces" for the CES number, completion date and serial numbers. Pass everything you found as the inputs below, plus anything Will tells you. Only ask Will for what you could not find. The dashboard shows Copy and Open portal buttons, so just summarise and flag what is still missing.',
+  description: 'Prepare a DNSP portal task for a Pylon project, ready for Will to hand to Claude in Chrome: task "preapproval" (solar/battery pre-approval application) or "commissioning" (notify the distributor the system is installed and the inverter is commissioned). Pulls the customer, site, NMI, meter, retailer, phases and system (signed design, else primary) from Pylon, lists anything missing, and returns the Chrome instruction plus the distributor portal link. Before calling it, gather the details yourself: find the customer\'s power bill (in Drive: Active Jobs › customer › Quote & bill for a signed job, else their Customer Quotes folder; or an email from them) and read it with read_document kind "bill" for NMI, meter number, retailer and distributor; for commissioning also find the CES (in Drive: Active Jobs › customer › CES & compliance, or email) and read it with kind "ces" for the CES number, completion date and serial numbers. Pass everything you found as the inputs below, plus anything Will tells you. Only ask Will for what you could not find. The dashboard shows Copy and Open portal buttons, so just summarise and flag what is still missing.',
   input_schema: { type: 'object', properties: {
     project_id: { type: 'string' }, task: { type: 'string', enum: ['preapproval', 'commissioning'] },
     distributor: { type: 'string' }, export_limit_kw: { type: 'number' },
@@ -1048,11 +1048,15 @@ tool({
 
 
 // ---------- Signed jobs and install dates ----------
+// where the customer's Drive folder is up to (see jobfolders.mjs)
+const folderStatus = (x) => x.folderError ? 'Drive problem: ' + x.folderError + (x.folderId ? (x.folderDone ? ' (folder is in Completed Jobs)' : ' (folder is in Active Jobs)') : '')
+  : x.folderDone ? 'in Completed Jobs' : x.folderId ? 'in Active Jobs' + (x.commTodoId ? ', moves to Completed Jobs when the commissioning to-do is ticked' : '')
+  : 'no folder set up by Eltra (signed before folders were moved automatically)';
 tool({
   name: 'jobs_list', group: 'core',
-  description: 'Signed jobs Eltra is tracking: customer, kit, install date (and where it came from), and which after-sale reminders have gone out (stock a week before, CES on the day, DNSP commissioning 2 weeks after).',
+  description: 'Signed jobs Eltra is tracking: customer, kit, install date (and where it came from), and which after-sale reminders have gone out (stock a week before, CES on the day, DNSP commissioning 2 weeks after), plus the link to the customer\'s Drive folder and where it is (Active Jobs, or Completed Jobs once the commissioning to-do is ticked).',
   input_schema: { type: 'object', properties: {} },
-  async run() { const d = await loadJobs(); return { jobs: d.list.filter((x) => !x.closed).map((x) => ({ customer: x.name, install_date: x.installDate || 'not set', set_by: x.installSource, kit: x.kit, reminders_sent: x.flags, date_check: x.dateCheck ? { proposed_date: x.dateCheck.date, status: x.dateCheck.status } : undefined })) }; }
+  async run() { const d = await loadJobs(); return { jobs: d.list.filter((x) => !x.closed).map((x) => ({ customer: x.name, install_date: x.installDate || 'not set', set_by: x.installSource, kit: x.kit, reminders_sent: x.flags, date_check: x.dateCheck ? { proposed_date: x.dateCheck.date, status: x.dateCheck.status } : undefined, folder: x.folderUrl || undefined, folder_status: folderStatus(x) })) }; }
 });
 tool({
   name: 'job_install_date', group: 'core',
