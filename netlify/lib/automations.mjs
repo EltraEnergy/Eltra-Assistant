@@ -11,6 +11,8 @@
 //    a decline or other day is flagged to Ethan, no reply in 2 days → a follow-up to-do for Ethan (see install-check.mjs)
 //  • each morning, installs whose day has arrived (Eltra's jobs + Ethan's calendar) → "Send invoice to <customer>" and
 //    "Work out the GST on the <customer> job" for Ethan (Accounts, due on the install day, never doubled)
+//  • a job is signed → its newest Customer Quotes folder moves into Active Jobs (with its subfolders); once the DNSP
+//    commissioning to-do is ticked, the folder moves into Completed Jobs (see jobfolders.mjs)
 //  • every Monday morning → "Do payroll", every Saturday morning → "Do ServiceM8" (Ethan, Accounts, due that day)
 // Runs on a schedule (functions/automations.mjs) and whenever the dashboard loads the to-do list (at most every 15 min).
 import { store, runAs, melbToday } from './util.mjs';
@@ -21,6 +23,7 @@ import { claudeJSON } from './claude.mjs';
 import { sendWeeklySummaries, sendTo } from './weekly.mjs';
 import { loadJobs, saveJobs, upsertJob, setInstall, findJob, normName, PRE_APPROVAL_SECTION, preApprovalText, findPreApproval, preApprovalDue, syncPreApprovals } from './jobs.mjs';
 import { watchInstallChecks, isHold } from './install-check.mjs';
+import { jobFolderOnSigning, jobFolderDone } from './jobfolders.mjs';
 
 const STATE = 'automations';
 const dayPlus = (n) => { const d = new Date(Date.now() + n * 864e5); return d.toLocaleDateString('en-CA', { timeZone: 'Australia/Melbourne' }); };
@@ -536,6 +539,11 @@ async function automationsAsWill({ force = false } = {}) {
         for (const t of signedTasks(name, design)) added.push(await addTodo({ ...t, ref: name + ' · auto' }));
         const jb = upsertJob(jobs, { name, projectId: p.id, kit: kitOf(design) });
         try { const t = await preApprovalOnSigning(jb, todos, today); if (t) added.push(t); } catch (e) { console.log('DNSP pre-approval to-do failed', name, e.message); }
+        // customer folder: Customer Quotes → Active Jobs (a Drive problem is saved on the job and never stops the rest)
+        if (!jb.folderId) {
+          try { const f = await jobFolderOnSigning({ name, address: p.address }); jb.folderId = f.folderId; jb.folderUrl = f.folderUrl; jb.folderFrom = f.folderFrom; delete jb.folderError; }
+          catch (e) { jb.folderError = String(e.message || e).slice(0, 300); console.log('customer folder failed', name, e.message); }
+        }
         // just signed: check the signed design for Solar Victoria again (it may have changed since the proposal; designs already loaded)
         const signedId = p.signed_design_id || (design && design.id);
         if (s.sv[p.id]) s.sv[p.id].checked = s.sv[p.id].checked.filter((x) => x !== signedId);
@@ -641,9 +649,18 @@ async function automationsAsWill({ force = false } = {}) {
       for (const jb of jobs.list) if (jb.installDate) jb.flags = { ...(jb.flags || {}), stock: true, ces: jb.installDate < inDays(-1), comm: jb.installDate < today };
       s.jobsInit = true;
     }
+    let todoItems = null;   // loaded only when a job's folder is waiting on its commissioning to-do
     for (const jb of jobs.list) {
       const day = jb.installDate; if (!day || jb.closed) continue;
       jb.flags = jb.flags || {};
+      // commissioning to-do ticked → the customer folder moves from Active Jobs to Completed Jobs
+      if (jb.folderId && !jb.folderDone && jb.commTodoId) {
+        try {
+          todoItems = todoItems || (await loadTodos()).items;
+          const ct = todoItems.find((t) => t.id === jb.commTodoId);
+          if (ct && ct.done) { await jobFolderDone(jb.folderId); jb.folderDone = new Date().toISOString(); delete jb.folderError; }
+        } catch (e) { jb.folderError = String(e.message || e).slice(0, 300); console.log('moving folder to Completed Jobs failed', jb.name, e.message); }
+      }
       if (first) { jb.flags = { stock: true, ces: day < inDays(-1), comm: day <= inDays(-14) }; continue; }
       if (!jb.flags.stock && day > today && day <= inDays(7)) {
         const due = new Date(Date.parse(day + 'T12:00:00Z') - 7 * 864e5).toISOString().slice(0, 10);
@@ -655,10 +672,11 @@ async function automationsAsWill({ force = false } = {}) {
         jb.flags.ces = true;
       }
       if (!jb.flags.comm && day <= inDays(-14)) {
-        added.push(await addTodo({ owner: 'will', section: 'DNSP - Grid connection', text: 'Lodge the DNSP commissioning notice for ' + jb.name + ' (installed ' + day + ', inspection should be done)', due: today, ref: jb.name + ' · auto' }));
+        const ct = await addTodo({ owner: 'will', section: 'DNSP - Grid connection', text: 'Lodge the DNSP commissioning notice for ' + jb.name + ' (installed ' + day + ', inspection should be done)', due: today, ref: jb.name + ' · auto' });
+        added.push(ct); jb.commTodoId = ct.id;
         jb.flags.comm = true;
       }
-      if (jb.flags.comm && day < inDays(-60)) jb.closed = true;
+      if (jb.flags.comm && day < inDays(-60) && (!jb.folderId || jb.folderDone)) jb.closed = true;   // never close a job whose folder is still in Active Jobs
     }
     // DNSP pre-approval due dates follow the install date (set from the calendar, job_install_date, the dashboard or a
     // customer confirmation, and moved when it moves)
