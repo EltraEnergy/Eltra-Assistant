@@ -1,12 +1,11 @@
 // The agent's tools. "action" tools change something (send, move, create) and only run after Will taps Approve.
 import { g, GMAIL, CAL, DRIVE, DRIVE_UP, accessToken } from './google.mjs';
-import { loadTodos, addTodo, updateTodo, addTodos, updateTodos } from './todos.mjs';
+import { loadTodos, addTodo, updateTodo } from './todos.mjs';
 import { currentUser } from './util.mjs';
 import { loadPrefs, portalFor } from './prefs.mjs';
 import { loadContent, updateItem } from './content.mjs';
 import { addProposal, decide, loadImprove } from './improve.mjs';
-import { loadJobs, saveJobs, setInstall, parseDay, findJob, normName, syncPreApprovals } from './jobs.mjs';
-import { smsReady, smsProvider, smsSender, sendSms, auMobile, auMobileLocal } from './sms.mjs';
+import { loadJobs, saveJobs, setInstall, parseDay } from './jobs.mjs';
 import { SKILLS, HOOKS, VOICE_TEMPLATE, RUBRIC } from './instagram-data.mjs';
 import { humanize, detect } from './instagram.mjs';
 import { rankHooks, beatSheet, swipeFile, captionLint } from './instagram-tools.mjs';
@@ -17,10 +16,10 @@ import { tz, clip, melbToDate, melbToday } from './util.mjs';
 // ---------------- helpers ----------------
 const b64urlDecode = (s) => Buffer.from(String(s || '').replace(/-/g, '+').replace(/_/g, '/'), 'base64');
 const b64url = (buf) => Buffer.from(buf).toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
-export const hdr = (m, name) => { const h = ((m.payload && m.payload.headers) || []).find((x) => x.name.toLowerCase() === name.toLowerCase()); return h ? h.value : ''; };
+const hdr = (m, name) => { const h = ((m.payload && m.payload.headers) || []).find((x) => x.name.toLowerCase() === name.toLowerCase()); return h ? h.value : ''; };
 const strip = (html) => String(html).replace(/<style[\s\S]*?<\/style>|<script[\s\S]*?<\/script>/gi, ' ').replace(/<br\s*\/?>|<\/p>|<\/div>|<\/tr>|<\/li>/gi, '\n').replace(/<[^>]+>/g, ' ')
   .replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&#39;|&rsquo;/g, '’').replace(/&quot;/g, '"').replace(/[ \t]+/g, ' ').replace(/\n\s*\n\s*\n+/g, '\n\n').trim();
-export function bodyText(payload) {
+function bodyText(payload) {
   let plain = '', html = '';
   (function walk(p) {
     if (!p) return;
@@ -30,7 +29,7 @@ export function bodyText(payload) {
   })(payload);
   return (plain || strip(html)).trim();
 }
-export function attachments(payload) {
+function attachments(payload) {
   const out = [];
   (function walk(p) { if (!p) return; if (p.filename && p.body && p.body.attachmentId) out.push({ filename: p.filename, mime_type: p.mimeType, size_kb: Math.round((p.body.size || 0) / 1024), attachment_id: p.body.attachmentId }); (p.parts || []).forEach(walk); })(payload);
   return out;
@@ -184,118 +183,48 @@ tool({
   }
 });
 const escHtml = (t) => String(t).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-// Will's default send-as address and Gmail signature (Settings > Signature). Needs no extra permission: gmail.modify can read it.
-async function gmailSendAs() {
+// Will's default Gmail signature (Settings > Signature). Needs no extra permission: gmail.modify can read it.
+async function gmailSignature() {
   try {
     const r = await g(GMAIL + '/settings/sendAs');
     const list = r.sendAs || [];
     const a = list.find((x) => x.isDefault) || list.find((x) => x.isPrimary) || list[0];
     const html = a && a.signature ? a.signature : '';
     const text = html ? html.replace(/<br\s*\/?>/gi, '\n').replace(/<\/(div|p|tr)>/gi, '\n').replace(/<[^>]+>/g, '').replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/\n{3,}/g, '\n\n').trim() : '';
-    return { html, text, email: (a && a.sendAsEmail) || '', name: (a && a.displayName) || '' };
-  } catch (e) { return { html: '', text: '', email: '', name: '' }; }
-}
-const oneLine = (s) => String(s || '').replace(/[\r\n]+/g, ' ').trim();   // keeps header values to one line
-// The message being replied to: the one named, or the latest real message in the thread (not a draft)
-async function replyTarget(reply_to_message_id, thread_id) {
-  const H = 'format=metadata&metadataHeaders=Message-ID&metadataHeaders=Subject&metadataHeaders=References';
-  if (reply_to_message_id) return g(GMAIL + '/messages/' + encodeURIComponent(reply_to_message_id) + '?' + H);
-  if (!thread_id) return null;
-  const t = await g(GMAIL + '/threads/' + encodeURIComponent(thread_id) + '?' + H);
-  const msgs = (t.messages || []).filter((m) => !(m.labelIds || []).includes('DRAFT'));
-  return msgs[msgs.length - 1] || { threadId: t.id, payload: { headers: [] } };
-}
-const replySubject = (o) => { const s = hdr(o, 'Subject'); return /^re:/i.test(s) ? s : 'Re: ' + s; };
-// Builds the email (text + HTML, with Will's signature underneath, threaded when it is a reply) as Gmail wants it
-async function buildEmail({ to, cc, subject, body, reply_to_message_id, thread_id }, sa) {
-  let threadId, extra = '';
-  const o = await replyTarget(reply_to_message_id, thread_id);
-  if (o) {
-    threadId = o.threadId || thread_id;
-    const mid = hdr(o, 'Message-ID'), refs = hdr(o, 'References');
-    if (mid) extra = 'In-Reply-To: ' + mid + '\r\nReferences: ' + (refs ? refs + ' ' : '') + mid + '\r\n';
-    if (!subject) subject = replySubject(o);
-  }
-  // Gmail doesn't add the signature to emails made through the API, so add Will's default signature here
-  // (HTML, with a plain-text copy) and send the email as text + HTML like Gmail does.
-  const sig = sa || await gmailSendAs();
-  body = String(body || '');
-  const textBody = body.replace(/\s+$/, '') + (sig.text ? '\n\n' + sig.text : '\nWill\nEltra Energy');
-  const htmlBody = '<div dir="ltr">' + escHtml(body.replace(/\s+$/, '')).replace(/\r?\n/g, '<br>') + (sig.html ? '<br><br><div class="gmail_signature" data-smartmail="gmail_signature">' + sig.html + '</div>' : '<br>Will<br>Eltra Energy') + '</div>';
-  const bnd = 'eltra_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
-  const part = (type, txt) => '--' + bnd + '\r\nContent-Type: ' + type + '; charset=UTF-8\r\nContent-Transfer-Encoding: base64\r\n\r\n' + Buffer.from(txt).toString('base64').replace(/.{76}/g, '$&\r\n') + '\r\n';
-  const from = sig.email ? 'From: ' + (sig.name ? mimeWord('"' + oneLine(sig.name).replace(/"/g, '') + '"') + ' ' : '') + '<' + sig.email + '>\r\n' : '';
-  const raw = from + 'To: ' + oneLine(to) + '\r\n' + (cc ? 'Cc: ' + oneLine(cc) + '\r\n' : '') + 'Subject: ' + mimeWord(oneLine(subject)) + '\r\n' + extra +
-    'MIME-Version: 1.0\r\nContent-Type: multipart/alternative; boundary="' + bnd + '"\r\n\r\n' + part('text/plain', textBody) + part('text/html', htmlBody) + '--' + bnd + '--';
-  return { raw: b64url(raw), threadId, subject: oneLine(subject) };
+    return { html, text };
+  } catch (e) { return { html: '', text: '' }; }
 }
 tool({
   name: 'gmail_create_draft', group: 'google', action: true,
   // shown in full for approval first; it only goes into Gmail once approved
   async describe(i) { return { title: 'Put this email in Gmail as a draft' + (i.reply_to_message_id ? ' (reply)' : ''), lines: ['To: ' + (i.to || '(same thread)') + (i.cc ? '  ·  Cc: ' + i.cc : ''), 'Subject: ' + (i.subject || '(same as the thread)')], preview: i.body || '' }; },
-  description: 'Create an email DRAFT in Will’s Gmail (nothing is sent). Only use this when Will asks for a draft; to send an email use gmail_send. To reply in an existing conversation, pass reply_to_message_id and the draft goes into that thread. Write in Will’s voice: friendly, plain Australian English, short. End the body with a short sign-off such as "Cheers," or "Thanks," and nothing after it: Will’s Gmail signature (name, details and logo) is added automatically underneath.',
+  description: 'Create an email DRAFT in Will’s Gmail (nothing is sent). To reply in an existing conversation, pass reply_to_message_id and the draft goes into that thread. Write in Will’s voice: friendly, plain Australian English, short. End the body with a short sign-off such as "Cheers," or "Thanks," and nothing after it: Will’s Gmail signature (name, details and logo) is added automatically underneath.',
   input_schema: { type: 'object', properties: { to: { type: 'string', description: 'Comma-separated addresses' }, cc: { type: 'string' }, subject: { type: 'string' }, body: { type: 'string', description: 'Plain text' }, reply_to_message_id: { type: 'string' } }, required: ['to', 'body'] },
   async run({ to, cc, subject, body, reply_to_message_id }) {
-    const e = await buildEmail({ to, cc, subject, body, reply_to_message_id });
-    const d = await g(GMAIL + '/drafts', { method: 'POST', body: JSON.stringify({ message: { raw: e.raw, ...(e.threadId ? { threadId: e.threadId } : {}) } }) });
-    return { draft_id: d.id, saved: 'Draft saved in Gmail. It has NOT been sent.', to, subject: e.subject };
-  }
-});
-// One email or a batch (emails: [...]); either way it is one Approve card and nothing is sent until approved
-const MAX_SEND = 10;
-const emailList = (i) => (Array.isArray(i.emails) && i.emails.length ? i.emails : [i]).map((e) => e || {});
-tool({
-  name: 'gmail_send', group: 'google', action: true,
-  description: 'Send an email straight from Will’s Gmail (will@eltraenergy.com.au) with his Gmail signature added underneath. This is the normal way to send email: no draft is made, Will sees the whole email in one Approve card and it is sent the moment he approves. To reply in a conversation pass reply_to_message_id (or thread_id) so it stays in that thread; the subject is filled in from the thread if left out. To send several emails with one approval (e.g. a batch of follow-ups), pass them in emails (up to ' + MAX_SEND + '); for one card per email, call this tool once per email in the same step. Write in Will’s voice: friendly, plain Australian English, short. End the body with a short sign-off such as "Cheers," or "Thanks," and nothing after it.',
-  input_schema: {
-    type: 'object',
-    properties: {
-      to: { type: 'string', description: 'Comma-separated addresses' }, cc: { type: 'string' }, subject: { type: 'string' }, body: { type: 'string', description: 'Plain text' },
-      reply_to_message_id: { type: 'string' }, thread_id: { type: 'string', description: 'Reply in this thread (to its latest message) when there is no message id' },
-      emails: { type: 'array', description: 'Several emails to send with one approval. Use instead of the single-email fields.', items: { type: 'object', properties: { to: { type: 'string' }, cc: { type: 'string' }, subject: { type: 'string' }, body: { type: 'string' }, reply_to_message_id: { type: 'string' }, thread_id: { type: 'string' } }, required: ['to', 'body'] } }
+    let threadId, extra = '';
+    if (reply_to_message_id) {
+      const o = await g(GMAIL + '/messages/' + encodeURIComponent(reply_to_message_id) + '?format=metadata&metadataHeaders=Message-ID&metadataHeaders=Subject&metadataHeaders=References');
+      threadId = o.threadId;
+      const mid = hdr(o, 'Message-ID'), refs = hdr(o, 'References');
+      if (mid) extra = 'In-Reply-To: ' + mid + '\r\nReferences: ' + (refs ? refs + ' ' : '') + mid + '\r\n';
+      if (!subject) { const s = hdr(o, 'Subject'); subject = /^re:/i.test(s) ? s : 'Re: ' + s; }
     }
-  },
-  async describe(i) {
-    const list = emailList(i);
-    const sa = await gmailSendAs();
-    // fill in the subject of replies so the card shows exactly what goes out (read-only lookups)
-    const subj = await Promise.all(list.map((e) => e.subject ? e.subject : (e.reply_to_message_id || e.thread_id) ? replyTarget(e.reply_to_message_id, e.thread_id).then(replySubject).catch(() => '(same as the thread)') : '(no subject)'));
-    const head = (e, k) => ['To: ' + (e.to || '(missing)') + (e.cc ? '  ·  Cc: ' + e.cc : ''), 'Subject: ' + subj[k] + (e.reply_to_message_id || e.thread_id ? '  (reply in the same thread)' : '')];
-    const from = 'From: ' + (sa.email || 'your Gmail');
-    if (list.length === 1) {
-      return { title: 'Send this email' + (list[0].reply_to_message_id || list[0].thread_id ? ' (reply)' : ''), lines: [from].concat(head(list[0], 0)), preview: String(list[0].body || '').replace(/\s+$/, '') + '\n\n' + (sa.text || 'Will\nEltra Energy') };
-    }
-    return {
-      title: 'Send these ' + list.length + ' emails' + (list.length > MAX_SEND ? ' (only ' + MAX_SEND + ' can go at once, so this will be refused)' : ''),
-      lines: [from, 'Your Gmail signature is added under each one.'],
-      preview: list.map((e, k) => (k + 1) + '. ' + head(e, k).join('\n') + '\n\n' + String(e.body || '').replace(/\s+$/, '')).join('\n\n————————\n\n')
-    };
-  },
-  async run(i) {
-    const list = emailList(i);
-    if (list.length > MAX_SEND) throw new Error('Too many emails at once (' + list.length + '). Send up to ' + MAX_SEND + ' per approval. Nothing was sent.');
-    const bad = list.findIndex((e) => !oneLine(e.to) || !String(e.body || '').trim());
-    if (bad >= 0) throw new Error('Email ' + (bad + 1) + ' is missing who it goes to or the message. Nothing was sent.');
-    const sa = await gmailSendAs();
-    const out = new Array(list.length);
-    // a few at a time, to stay inside Gmail's sending limits and Netlify's time limit
-    for (let k = 0; k < list.length; k += 3) {
-      await Promise.all(list.slice(k, k + 3).map(async (e, j) => {
-        const n = k + j;
-        try {
-          const m = await buildEmail(e, sa);
-          const s = await g(GMAIL + '/messages/send', { method: 'POST', body: JSON.stringify({ raw: m.raw, ...(m.threadId ? { threadId: m.threadId } : {}) }) });
-          out[n] = { sent: true, to: e.to, subject: m.subject, message_id: s.id, thread_id: s.threadId };
-        } catch (err) { out[n] = { sent: false, to: e.to, error: err.message || 'Failed' }; }
-      }));
-    }
-    if (out.length === 1) { if (!out[0].sent) throw new Error(out[0].error); return out[0]; }
-    return { sent: out.filter((x) => x.sent).length, failed: out.filter((x) => !x.sent).length, emails: out };
+    // Gmail doesn't add the signature to drafts made through the API, so add Will's default signature here
+    // (HTML, with a plain-text copy) and send the email as text + HTML like Gmail does.
+    const sig = await gmailSignature();
+    const textBody = body.replace(/\s+$/, '') + (sig.text ? '\n\n' + sig.text : '\nWill\nEltra Energy');
+    const htmlBody = '<div dir="ltr">' + escHtml(body.replace(/\s+$/, '')).replace(/\r?\n/g, '<br>') + (sig.html ? '<br><br><div class="gmail_signature" data-smartmail="gmail_signature">' + sig.html + '</div>' : '<br>Will<br>Eltra Energy') + '</div>';
+    const bnd = 'eltra_' + Date.now().toString(36);
+    const part = (type, txt) => '--' + bnd + '\r\nContent-Type: ' + type + '; charset=UTF-8\r\nContent-Transfer-Encoding: base64\r\n\r\n' + Buffer.from(txt).toString('base64').replace(/.{76}/g, '$&\r\n') + '\r\n';
+    const raw = 'To: ' + to + '\r\n' + (cc ? 'Cc: ' + cc + '\r\n' : '') + 'Subject: ' + mimeWord(subject || '') + '\r\n' + extra +
+      'MIME-Version: 1.0\r\nContent-Type: multipart/alternative; boundary="' + bnd + '"\r\n\r\n' + part('text/plain', textBody) + part('text/html', htmlBody) + '--' + bnd + '--';
+    const d = await g(GMAIL + '/drafts', { method: 'POST', body: JSON.stringify({ message: { raw: b64url(raw), ...(threadId ? { threadId } : {}) } }) });
+    return { draft_id: d.id, saved: 'Draft saved in Gmail. It has NOT been sent.', to, subject };
   }
 });
 tool({
   name: 'gmail_send_draft', group: 'google', action: true,
-  description: 'Send a Gmail draft that already exists. Only when Will has clearly asked to send that draft. To send a new email or reply, use gmail_send instead (no draft needed). Will approves it on screen first.',
+  description: 'Send a Gmail draft. Only when Will has clearly asked to send it. Will approves it on screen first.',
   input_schema: { type: 'object', properties: { draft_id: { type: 'string' } }, required: ['draft_id'] },
   async describe({ draft_id }) {
     const d = await g(GMAIL + '/drafts/' + encodeURIComponent(draft_id) + '?format=full');
@@ -362,56 +291,6 @@ tool({
   async run(i) {
     const e = await g(CAL + '/events?sendUpdates=' + (i.attendees && i.attendees.length ? 'all' : 'none'), { method: 'POST', body: JSON.stringify({ summary: i.title, location: i.location, description: i.description, start: { dateTime: i.start.length === 16 ? i.start + ':00' : i.start, timeZone: tz }, end: { dateTime: i.end.length === 16 ? i.end + ':00' : i.end, timeZone: tz }, attendees: (i.attendees || []).map((email) => ({ email })) }) });
     return { created: true, link: e.htmlLink };
-  }
-});
-// change or remove an existing event (ids come from calendar_events)
-const calEv = (id) => CAL + '/events/' + encodeURIComponent(id);
-const evWhen = (e) => (e.start && e.start.date ? e.start.date + ' (all day)' : e.start && e.start.dateTime ? melbDate(e.start.dateTime) : '');
-const evGuests = (e) => (e && e.attendees || []).filter((a) => !a.self).length;
-tool({
-  name: 'calendar_update_event', group: 'google', action: true,
-  description: 'Change an event on Will’s Google Calendar: title, times, location or description. event_id comes from calendar_events. Only give what changes. Times are Melbourne local time as YYYY-MM-DDTHH:MM; all_day_date (YYYY-MM-DD) makes it an all-day event on that day instead. Anyone invited gets the update.',
-  input_schema: { type: 'object', properties: { event_id: { type: 'string' }, title: { type: 'string' }, start: { type: 'string' }, end: { type: 'string' }, all_day_date: { type: 'string' }, location: { type: 'string' }, description: { type: 'string' } }, required: ['event_id'] },
-  async describe(i) {
-    const e = await g(calEv(i.event_id)).catch(() => null);
-    return { title: 'Change calendar event', lines: [
-      e ? 'Event: ' + (e.summary || '(no title)') + ', ' + evWhen(e) : 'Event id: ' + i.event_id,
-      i.title && 'New title: ' + i.title,
-      i.all_day_date ? 'New day: ' + i.all_day_date + ' (all day)' : (i.start || i.end) && 'New time: ' + (i.start || '…').replace('T', ' ') + ' to ' + (i.end || '…').replace('T', ' '),
-      i.location && 'Location: ' + i.location, i.description && 'New description',
-      evGuests(e) ? 'Guests (' + evGuests(e) + ') get the update.' : null
-    ].filter(Boolean) };
-  },
-  async run(i) {
-    const cur = await g(calEv(i.event_id)), body = {};
-    if (i.title) body.summary = i.title;
-    if (i.location) body.location = i.location;
-    if (i.description) body.description = i.description;
-    const dt = (v) => ({ dateTime: v.length === 16 ? v + ':00' : v, timeZone: tz, date: null });
-    if (i.all_day_date) {
-      const day = parseDay(i.all_day_date); if (!day) throw new Error('Give all_day_date as YYYY-MM-DD');
-      body.start = { date: day, dateTime: null, timeZone: null }; body.end = { date: new Date(Date.parse(day + 'T12:00:00Z') + 864e5).toISOString().slice(0, 10), dateTime: null, timeZone: null };
-    } else {
-      if (i.start) body.start = dt(i.start);
-      if (i.end) body.end = dt(i.end);
-    }
-    if (!Object.keys(body).length) throw new Error('Nothing to change.');
-    const e = await g(calEv(i.event_id) + '?sendUpdates=' + (evGuests(cur) ? 'all' : 'none'), { method: 'PATCH', body: JSON.stringify(body) });
-    return { updated: true, event: eventOut(e) };
-  }
-});
-tool({
-  name: 'calendar_delete_event', group: 'google', action: true,
-  description: 'Remove an event from Will’s Google Calendar (for example an install HOLD that is no longer needed). event_id comes from calendar_events. Anyone invited is told it is cancelled.',
-  input_schema: { type: 'object', properties: { event_id: { type: 'string' } }, required: ['event_id'] },
-  async describe(i) {
-    const e = await g(calEv(i.event_id)).catch(() => null);
-    return { title: 'Remove from calendar', lines: [e ? (e.summary || '(no title)') + ', ' + evWhen(e) : 'Event id: ' + i.event_id, evGuests(e) ? 'Guests (' + evGuests(e) + ') are told it’s cancelled.' : null].filter(Boolean) };
-  },
-  async run(i) {
-    const e = await g(calEv(i.event_id));
-    await g(calEv(i.event_id) + '?sendUpdates=' + (evGuests(e) ? 'all' : 'none'), { method: 'DELETE' });
-    return { deleted: true, title: e.summary };
   }
 });
 
@@ -687,62 +566,28 @@ tool({
 
 
 // ---------- To-do list (sections like DNSP, Quoting, Order stock) ----------
-const TODO_FIELDS = { text: { type: 'string' }, section: { type: 'string' }, due: { type: 'string' }, ref: { type: 'string' }, note: { type: 'string', description: 'Optional extra detail shown under the to-do (what a customer said, what it is waiting on).' } };
-const UPDATE_FIELDS = { id: { type: 'string' }, done: { type: 'boolean' }, text: { type: 'string' }, section: { type: 'string' }, due: { type: 'string' }, note: { type: 'string', description: 'Replace the whole note ("" clears it).' }, append_note: { type: 'string', description: 'Add this to the end of the existing note, on a new line (keeps what is already there).' }, for: { type: 'string', enum: ['will', 'ethan', 'both'] } };
-// one line per item so a failure is plain to see
-function batchReport(results, list, verb) {
-  const out = results.map((r, n) => (r.ok ? { ok: true, [verb]: r.item } : { ok: false, error: r.error, asked: list[n] }));
-  const failed = out.filter((r) => !r.ok).length;
-  return { summary: (out.length - failed) + ' of ' + out.length + ' ' + verb + (failed ? '; ' + failed + ' FAILED, tell the person which ones' : ''), results: out };
-}
 tool({
   name: 'todo_list', group: 'core',
-  description: 'Show the to-do list. By default only the ones for the person you are talking to (and shared ones); whose: "everyone" shows the whole team\'s, "will" or "ethan" one person\'s. Optionally one section (e.g. "DNSP" for all the DNSP sub-sections, "DNSP - Pre approval", "Quoting", "Order stock", "Install dates", "Accounts", "Socials", "Admin"). Includes ids for ticking things off, and any note on each to-do.',
+  description: 'Show the to-do list. By default only the ones for the person you are talking to (and shared ones); whose: "everyone" shows the whole team\'s, "will" or "ethan" one person\'s. Optionally one section (e.g. "DNSP", "Quoting", "Order stock", "Install dates", "Accounts", "Socials", "Admin"). Includes ids for ticking things off.',
   input_schema: { type: 'object', properties: { section: { type: 'string' }, include_done: { type: 'boolean' }, whose: { type: 'string', enum: ['mine', 'everyone', 'will', 'ethan'] } } },
   async run({ section, include_done, whose }) {
     const d = await loadTodos(), low = String(section || '').toLowerCase(), me = currentUser();
     const want = whose === 'everyone' ? null : whose === 'will' || whose === 'ethan' ? whose : me;
-    const items = d.items.filter((x) => (include_done || !x.done) && (!want || x.owner === want || x.owner === 'both') && (!low || x.section.toLowerCase().includes(low) || (low.includes(x.section.toLowerCase()) && !/ - /.test(low))));
-    return { sections: d.sections, items: items.map((x) => ({ id: x.id, section: x.section, text: x.text, for: x.owner, due: x.due || undefined, done: x.done || undefined, ref: x.ref || undefined, note: x.note || undefined })) };
-  }
-});
-tool({
-  name: 'invoice_scan', group: 'core',
-  description: 'Check Ethan’s and Will’s inboxes for new supplier invoices and bills now (read-only: no email is sent, archived or changed) and add any new ones to Ethan’s Accounts to-dos, skipping ones already on the list. This already runs automatically early every morning, so only use it when someone asks to check for invoices again now. If the result says more: true, call it again to carry on.',
-  input_schema: { type: 'object', properties: {} },
-  async run() {
-    const { runInvoiceScan } = await import('./invoices.mjs');   // loaded here, as invoices.mjs uses this file's Gmail helpers
-    const r = await runInvoiceScan({ force: true, budgetMs: 7000, batchSize: 4 });
-    // just what the to-dos say: never the subjects or contents of Will's emails
-    return { ...r, added: (r.added || []).map((x) => x.text) };
+    const items = d.items.filter((x) => (include_done || !x.done) && (!want || x.owner === want || x.owner === 'both') && (!low || x.section.toLowerCase().includes(low) || low.includes(x.section.toLowerCase())));
+    return { sections: d.sections, items: items.map((x) => ({ id: x.id, section: x.section, text: x.text, for: x.owner, due: x.due || undefined, done: x.done || undefined, ref: x.ref || undefined })) };
   }
 });
 tool({
   name: 'todo_add', group: 'core',
-  description: 'Add a to-do. section: DNSP - Pre approval, DNSP - Grid connection, DNSP - Solar Vic, DNSP - Retailer request, Quoting, Order stock, Install dates (booking installs in), Accounts (invoicing, Xero/MYOB), Socials (Facebook/Instagram), Admin, or a new section name ("Parent - Sub" makes a sub-section). Ethan looks after Order stock, Install dates, Accounts and Socials; Will does DNSP, Quoting and the rest, so if for is not given and the task clearly belongs to the other person, set for to them. for: "me" (default, the person you are talking to), "will", "ethan" or "both". due: YYYY-MM-DD if a day was given. ref: customer or job it relates to. note: optional extra detail (what the customer said, what it is waiting on). To add several to-dos, put them all in items in ONE call (never several todo_add calls at once, or some can be lost), then check each result and tell the person about any that failed.',
-  input_schema: { type: 'object', properties: { ...TODO_FIELDS, for: { type: 'string', enum: ['me', 'will', 'ethan', 'both'] }, items: { type: 'array', description: 'Several to-dos to add in one go, each with the same fields (text, section, for, due, ref, note).', items: { type: 'object', properties: { ...TODO_FIELDS, for: { type: 'string', enum: ['me', 'will', 'ethan', 'both'] } }, required: ['text'] } } } },
-  async run({ items, ...i }) {
-    if (Array.isArray(items) && items.length) {
-      const list = i.text ? [i, ...items] : items;
-      return batchReport(await addTodos(list.map((x) => ({ ...x, owner: x.for }))), list, 'added');
-    }
-    if (!i.text) throw new Error('A to-do needs some text');
-    const it = await addTodo({ ...i, owner: i.for }); return { added: it };
-  }
+  description: 'Add a to-do. section: DNSP (pre-approvals, grid connections), Quoting, Order stock, Install dates (booking installs in), Accounts (invoicing, Xero/MYOB), Socials (Facebook/Instagram), Admin, or a new section name. Ethan looks after Order stock, Install dates, Accounts and Socials; Will does DNSP, Quoting and the rest, so if for is not given and the task clearly belongs to the other person, set for to them. for: "me" (default, the person you are talking to), "will", "ethan" or "both". due: YYYY-MM-DD if a day was given. ref: customer or job it relates to.',
+  input_schema: { type: 'object', properties: { text: { type: 'string' }, section: { type: 'string' }, for: { type: 'string', enum: ['me', 'will', 'ethan', 'both'] }, due: { type: 'string' }, ref: { type: 'string' } }, required: ['text'] },
+  async run(i) { const it = await addTodo({ ...i, owner: i.for }); return { added: it }; }
 });
 tool({
   name: 'todo_update', group: 'core',
-  description: 'Tick off (done: true), reopen, rename, move (section, e.g. "DNSP - Grid connection") or re-date a to-do by id (get ids from todo_list), or add a note to it. For "add a note to X: …" use append_note (keeps any note already there); use note only to replace the whole note, or note: "" to clear it. Notes stay on the to-do when it is moved or ticked off. Ticking off a "DNSP - Pre approval" to-do automatically adds a "Grid connection" to-do for that customer, and ticking off a "DNSP - Grid connection" one adds "Confirm meter reconfigured" under "DNSP - Retailer request", so don\'t add those yourself. To change several to-dos, put them all in updates in ONE call (never several todo_update calls at once, or some changes can be lost), then check each result and tell the person about any that failed.',
-  input_schema: { type: 'object', properties: { ...UPDATE_FIELDS, updates: { type: 'array', description: 'Several to-dos to change in one go, each with its id and the fields to change.', items: { type: 'object', properties: UPDATE_FIELDS, required: ['id'] } } } },
-  async run({ updates, ...one }) {
-    const patchOf = ({ for: f, ...patch }) => (f ? { ...patch, owner: f } : patch);
-    if (Array.isArray(updates) && updates.length) {
-      const list = one.id ? [one, ...updates] : updates;
-      return batchReport(await updateTodos(list.map(patchOf)), list, 'updated');
-    }
-    if (!one.id) throw new Error('Which to-do? Give its id (from todo_list).');
-    const it = await updateTodo(one.id, patchOf(one)); return { updated: it };
-  }
+  description: 'Tick off (done: true), reopen, rename, move or re-date a to-do by id (get ids from todo_list).',
+  input_schema: { type: 'object', properties: { id: { type: 'string' }, done: { type: 'boolean' }, text: { type: 'string' }, section: { type: 'string' }, due: { type: 'string' }, for: { type: 'string', enum: ['will', 'ethan', 'both'] } }, required: ['id'] },
+  async run({ id, for: f, ...patch }) { if (f) patch.owner = f; const it = await updateTodo(id, patch); return { updated: it }; }
 });
 
 // ---------- Read a power bill, CES or other PDF/photo (Drive file or email attachment) ----------
@@ -780,46 +625,28 @@ tool({
     } else throw new Error('Give a Drive file_id or an email message_id');
     const isPdf = /pdf/.test(mime), isImg = /^image\/(jpeg|png|gif|webp)$/.test(mime);
     if (!isPdf && !isImg) return { name, note: 'Can only read PDFs and JPEG/PNG photos (this is ' + mime + ').' };
-    const fields = DOC_FIELDS[kind] || DOC_FIELDS.other, keys = Object.keys(fields);
-    // Ask for plain JSON in the prompt and parse it (newer models don't support a forced tool_choice).
-    const shape = keys.map((k) => '  "' + k + '": ' + fields[k]).join('\n');
+    const fields = DOC_FIELDS[kind] || DOC_FIELDS.other, props = {};
+    Object.keys(fields).forEach((k) => { props[k] = { type: ['string', 'null'], description: fields[k] }; });
     const model = await claudeModel(key);
     const res = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST', headers: { 'x-api-key': key, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
-      body: JSON.stringify({ model, max_tokens: 1500,
+      body: JSON.stringify({ model, max_tokens: 1500, tools: [{ name: 'details', description: 'Details read from the document', input_schema: { type: 'object', properties: props } }], tool_choice: { type: 'tool', name: 'details' },
         messages: [{ role: 'user', content: [
           isPdf ? { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: b64 } } : { type: 'image', source: { type: 'base64', media_type: mime, data: b64 } },
-          { type: 'text', text: 'Read this ' + (kind === 'bill' ? 'Australian electricity bill' : kind === 'ces' ? 'Victorian Certificate of Electrical Safety' : 'document') + ' and fill in the details. Copy numbers exactly as printed. Use null for anything not shown, cut off, blurry or otherwise unreadable; never guess.\n\nReply with only one JSON object (no other text, no code fence) with exactly these keys, each a string or null:\n{\n' + shape + '\n}' }
+          { type: 'text', text: 'Read this ' + (kind === 'bill' ? 'Australian electricity bill' : kind === 'ces' ? 'Victorian Certificate of Electrical Safety' : 'document') + ' and fill in the details. Copy numbers exactly as printed. Use null for anything not shown; never guess.' }
         ] }] })
     });
     const out = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error('Could not read the document: ' + ((out.error && out.error.message) || res.status));
-    const text = (out.content || []).filter((c) => c.type === 'text').map((c) => c.text).join('\n');
-    let parsed = null;
-    const a = text.indexOf('{'), z = text.lastIndexOf('}');
-    if (a >= 0 && z > a) { try { parsed = JSON.parse(text.slice(a, z + 1)); } catch {} }
-    if (!parsed || typeof parsed !== 'object') return { file: name, kind, details: null, note: 'I couldn\'t read the details from this document. Check the file is clear and try again, or read it yourself.' };
-    const details = {}, unreadable = [];
-    keys.forEach((k) => {
-      let v = parsed[k];
-      if (typeof v === 'string') { v = v.trim(); if (!v || /^(null|n\/?a|unknown|not (shown|visible|readable|legible)|unreadable|illegible)$/i.test(v)) v = null; }
-      else if (typeof v === 'number' || typeof v === 'boolean') v = String(v);
-      else v = null;
-      // An NMI is 10 or 11 letters/digits; anything else is a misread, so don't pass it on.
-      if (k === 'nmi' && v && !/^[A-Z0-9]{10,11}$/i.test(v.replace(/\s/g, ''))) v = null;
-      else if (k === 'nmi' && v) v = v.replace(/\s/g, '').toUpperCase();
-      details[k] = v; if (v === null) unreadable.push(k);
-    });
-    const r = { file: name, kind, details };
-    if (unreadable.length) { r.could_not_read = unreadable; r.note = 'Could not read ' + unreadable.map((k) => k === 'nmi' ? 'NMI' : k.replace(/_/g, ' ')).join(', ') + ' from this document, so I have left ' + (unreadable.length === 1 ? 'it' : 'them') + ' blank rather than guess.'; }
-    return r;
+    const t = (out.content || []).find((c) => c.type === 'tool_use');
+    return { file: name, kind, details: t ? t.input : null };
   }
 });
 
 // ---------- DNSP browser tasks: pre-approval and commissioning (filled in by Claude in Chrome) ----------
 tool({
   name: 'dnsp_task_pack', group: 'pylon',
-  description: 'Prepare a DNSP portal task for a Pylon project, ready for Will to hand to Claude in Chrome: task "preapproval" (solar/battery pre-approval application) or "commissioning" (notify the distributor the system is installed and the inverter is commissioned). Pulls the customer, site, NMI, meter, retailer, phases and system (signed design, else primary) from Pylon, lists anything missing, and returns the Chrome instruction plus the distributor portal link. Before calling it, gather the details yourself: find the customer\'s power bill (their Customer Quotes folder in Drive, or an email from them) and read it with read_document kind "bill" for NMI, meter number, retailer and distributor; for commissioning also find the CES (Drive or email) and read it with kind "ces" for the CES number, completion date and serial numbers. Pass everything you found as the inputs below, plus anything Will tells you. Only ask Will for what you could not find. The dashboard shows Copy and Open portal buttons, so just summarise and flag what is still missing.',
+  description: 'Prepare a DNSP portal task for a Pylon project, ready for Will to hand to Claude in Chrome: task "preapproval" (solar/battery pre-approval application) or "commissioning" (notify the distributor the system is installed and the inverter is commissioned). Pulls the customer, site, NMI, meter, retailer, phases and system (signed design, else primary) from Pylon, lists anything missing, and returns the Chrome instruction plus the distributor portal link. Before calling it, gather the details yourself: find the customer\'s power bill (their folder in Drive: Customer Quotes before signing, Active Jobs > customer > Quote & bill after, or an email from them) and read it with read_document kind "bill" for NMI, meter number, retailer and distributor; for commissioning also find the CES (Active Jobs > customer > CES & compliance, elsewhere in Drive, or email) and read it with kind "ces" for the CES number, completion date and serial numbers. Pass everything you found as the inputs below, plus anything Will tells you. Only ask Will for what you could not find. The dashboard shows Copy and Open portal buttons, so just summarise and flag what is still missing.',
   input_schema: { type: 'object', properties: {
     project_id: { type: 'string' }, task: { type: 'string', enum: ['preapproval', 'commissioning'] },
     distributor: { type: 'string' }, export_limit_kw: { type: 'number' },
@@ -922,19 +749,6 @@ tool({
   description: 'Make the slide images for a carousel (1080×1350, Eltra Energy branding). Give the cover and each slide\'s words (keep each slide short: a heading and one or two lines). Ethan downloads the images from the card in the chat and posts them. Run the slide text through instagram_humanize first.',
   input_schema: { type: 'object', properties: { slides: { type: 'array', items: { type: 'object', properties: { heading: { type: 'string' }, body: { type: 'string' } }, required: ['heading'] }, description: 'first is the cover, last is usually the ask' } }, required: ['slides'] },
   async run({ slides }) { const s = (slides || []).slice(0, 10).map((x) => ({ heading: String(x.heading || '').slice(0, 120), body: String(x.body || '').slice(0, 300) })); return { carousel: { slides: s }, note: 'The dashboard shows the slides with a Download button. Tell Ethan they are ready.' }; }
-});
-const WALLPAPER_SIZES = ['phone', 'phone_1080', 'desktop', 'desktop_4k'];
-tool({
-  name: 'brand_wallpaper', group: 'core',
-  description: 'Make an Eltra Energy branded wallpaper (blue background, white logo, optional short tagline) in one or more sizes: phone = 1170×2532 (iPhone), phone_1080 = 1080×1920 (Android/older phones), desktop = 1920×1080, desktop_4k = 3840×2160. The logo and tagline are kept clear of the clock at the top and the dock/lock screen buttons at the bottom. The dashboard shows a preview card with a Save button for each size. Leave sizes out to make all four.',
-  input_schema: { type: 'object', properties: {
-    sizes: { type: 'array', items: { type: 'string', enum: WALLPAPER_SIZES }, description: 'which sizes to make; default all four' },
-    tagline: { type: 'string', description: 'optional short line under the logo (a few words, under 60 characters)' }
-  } },
-  async run({ sizes, tagline }) {
-    const s = [...new Set((Array.isArray(sizes) ? sizes : []).filter((x) => WALLPAPER_SIZES.includes(x)))];
-    return { wallpaper: { sizes: s.length ? s : WALLPAPER_SIZES, tagline: String(tagline || '').replace(/\s+/g, ' ').trim().slice(0, 60) }, note: 'The dashboard shows the wallpaper with a Save button for each size. Tell them it is ready.' };
-  }
 });
 tool({
   name: 'instagram_voice', group: 'core',
@@ -1052,7 +866,7 @@ tool({
   name: 'jobs_list', group: 'core',
   description: 'Signed jobs Eltra is tracking: customer, kit, install date (and where it came from), and which after-sale reminders have gone out (stock a week before, CES on the day, DNSP commissioning 2 weeks after).',
   input_schema: { type: 'object', properties: {} },
-  async run() { const d = await loadJobs(); return { jobs: d.list.filter((x) => !x.closed).map((x) => ({ customer: x.name, install_date: x.installDate || 'not set', set_by: x.installSource, kit: x.kit, reminders_sent: x.flags, date_check: x.dateCheck ? { proposed_date: x.dateCheck.date, status: x.dateCheck.status } : undefined })) }; }
+  async run() { const d = await loadJobs(); return { jobs: d.list.filter((x) => !x.closed).map((x) => ({ customer: x.name, install_date: x.installDate || 'not set', set_by: x.installSource, kit: x.kit, folder: x.folderUrl, folder_status: x.folderDone ? 'Completed Jobs' : x.folderId ? 'Active Jobs' : (x.folderError ? 'not moved: ' + x.folderError : 'none yet'), reminders_sent: x.flags })) }; }
 });
 tool({
   name: 'job_install_date', group: 'core',
@@ -1060,98 +874,8 @@ tool({
   input_schema: { type: 'object', properties: { customer: { type: 'string' }, date: { type: 'string' } }, required: ['customer', 'date'] },
   async run({ customer, date }) {
     const day = parseDay(date); if (!day) throw new Error('Give the date as YYYY-MM-DD');
-    const d = await loadJobs(), j = setInstall(d, customer, day, 'eltra');
-    await syncPreApprovals(d).catch((e) => console.log('DNSP pre-approval due date', e.message));   // due 7 days before the install
-    await saveJobs(d);
+    const d = await loadJobs(), j = setInstall(d, customer, day, 'eltra'); await saveJobs(d);
     return { saved: { customer: j.name, install_date: j.installDate, previous: j.previousDate }, note: j.unsigned ? 'No signed job by that name yet; the date is saved and the reminders will still run.' : undefined };
-  }
-});
-
-// ---------- Install date availability check (ask the customer by email and text before the date is confirmed) ----------
-const CHECK_FIELDS = { customer: { type: 'string', description: 'customer name as on the job' }, date: { type: 'string', description: 'proposed install date, YYYY-MM-DD' }, project_id: { type: 'string', description: 'Pylon project id, from install_date_check' } };
-const HOLD_LINE = (i) => 'Puts an all-day "HOLD – Install – ' + i.customer + ' (awaiting confirmation)" on your calendar for ' + (parseDay(i.date) || i.date) + ' (once, no invites). It becomes "Install – ' + i.customer + '" when they confirm and comes off if they can’t.';
-const checkDay = (date) => { const day = parseDay(date); if (!day) throw new Error('Give the date as YYYY-MM-DD'); return day; };
-tool({
-  name: 'install_date_check', group: 'core',
-  description: 'Step 1 of asking a customer whether a proposed install date suits them (for example "book Sarah in for Tuesday 8 December"). Looks up the customer\'s name, email, mobile and address in Pylon and the job, and returns a ready-made email and text, plus anything already on that day in the calendar or Eltra’s jobs (clashes, including other install HOLDs). If clash_warning is set, tell them and check they still want that day first. Then, in ONE step, call install_check_send_email (and install_check_send_sms if texts are set up and there is a mobile) so each shows its own Approve card. Use the drafts as they are unless asked to change them. Do not record the date with job_install_date yet: Eltra watches for the reply, records the date when the customer confirms, and flags declines and no-replies to Ethan.',
-  input_schema: { type: 'object', properties: CHECK_FIELDS, required: ['customer', 'date'] },
-  async run({ customer, date, project_id }) {
-    const day = checkDay(date);
-    const { draftMessages, checkOut, fmtDay } = await import('./install-check.mjs');
-    const d = await loadJobs(), job = findJob(d, customer, project_id);
-    let proj = null, note = [];
-    if (pylonReady()) {
-      const id = project_id || (job && job.projectId);
-      if (id) proj = pylonProject((await pylon('/solar_projects/' + encodeURIComponent(id))).data);
-      else {
-        const found = (await toolByName('pylon_find_projects').run({ search: customer })).projects || [];
-        proj = found.find((p) => p.signed) || found.find((p) => p.sold) || found[0] || null;
-        if (found.length > 1) note.push('Several Pylon projects matched; using ' + (proj.customer && proj.customer.name) + ' (' + proj.reference + '). Check it is the right customer.');
-      }
-    } else note.push('Pylon isn’t connected, so ask for the customer’s email and mobile.');
-    const cust = (proj && proj.customer) || {}, name = cust.name || (job && job.name) || customer;
-    if (proj && !proj.sold) note.push('This Pylon project isn’t signed yet.');
-    const mobile = auMobile(cust.phone);
-    if (cust.phone && !mobile) note.push('The phone number in Pylon (' + cust.phone + ') isn’t an Australian mobile, so no text can go.');
-    if (!cust.email) note.push('No email in Pylon for this customer.');
-    if (!smsReady()) note.push('Texts aren’t set up yet (Twilio or GoHighLevel in Netlify), so only send the email.');
-    const drafts = draftMessages({ name, day, address: proj && proj.address });
-    // anything already on that day: calendar events (including other holds) and other jobs Eltra has booked or held
-    const ownHold = job && job.dateCheck && job.dateCheck.hold && job.dateCheck.hold.id;
-    const events = await toolByName('calendar_events').run({ from_date: day, days: 1 }).catch((e) => { note.push('Couldn’t check the calendar: ' + e.message); return []; });
-    const others = events.filter((e) => e.id !== ownHold), clashRe = /\b(hold|install(ation)?)\b/i;
-    const clashes = others.filter((e) => clashRe.test(e.title)).map((e) => ({ title: e.title, when: e.start, hold: /^\s*hold\b/i.test(e.title) }));
-    d.list.filter((x) => x !== job && !x.closed && (x.installDate === day || (x.dateCheck && x.dateCheck.date === day && ['asked', 'no reply', 'replied'].includes(x.dateCheck.status))))
-      .forEach((x) => { if (!clashes.some((c) => normName(c.title).includes(normName(x.name)))) clashes.push({ title: (x.installDate === day ? 'Install – ' : 'HOLD – Install – ') + x.name + ' (in Eltra’s jobs)', when: day, hold: x.installDate !== day }); });
-    return {
-      customer: name, project_id: proj && proj.id, address: proj && proj.address, email: cust.email || null, mobile: mobile, mobile_display: mobile ? auMobileLocal(mobile) : null,
-      proposed_date: day, proposed_date_words: fmtDay(day), texts_ready: smsReady(), text_sender: smsReady() ? smsSender() : undefined,
-      existing_check: job ? checkOut(job.dateCheck) : null, drafts, notes: note.length ? note : undefined,
-      clashes: clashes.length ? clashes : undefined,
-      clash_warning: clashes.length ? 'Already on ' + fmtDay(day) + ': ' + clashes.map((c) => c.title).join('; ') + '. Warn them about this before sending, and only go ahead if they still want that day.' : undefined,
-      other_events_that_day: others.filter((e) => !clashRe.test(e.title)).map((e) => e.title + ' (' + e.start + ')').slice(0, 8)
-    };
-  }
-});
-tool({
-  name: 'install_check_send_email', group: 'google', action: true,
-  description: 'Step 2 (email): send the customer the install date question from the Gmail of the person you are talking to (via gmail_send, with their signature), and track it on the job so Eltra watches for the reply. Use the subject and body from install_date_check. Shows an Approve card.',
-  input_schema: { type: 'object', properties: { ...CHECK_FIELDS, to: { type: 'string', description: 'customer email' }, subject: { type: 'string' }, body: { type: 'string', description: 'plain text, ending with a sign-off like "Cheers,"' } }, required: ['customer', 'date', 'to', 'body'] },
-  async describe(i) {
-    const card = await toolByName('gmail_send').describe({ to: i.to, subject: i.subject, body: i.body });
-    return { ...card, title: 'Ask ' + i.customer + ' about their install date (email)', lines: card.lines.concat(['Eltra will watch for their reply and track it on the job.', HOLD_LINE(i)]) };
-  },
-  async run(i) {
-    const day = checkDay(i.date);
-    const sent = await toolByName('gmail_send').run({ to: i.to, subject: i.subject, body: i.body });
-    const { recordAsked } = await import('./install-check.mjs');
-    const check = await recordAsked({ customer: i.customer, projectId: i.project_id, day, via: 'email', detail: { to: i.to, threadId: sent.thread_id, messageId: sent.message_id, user: currentUser() } });
-    return { sent: true, to: i.to, check, note: 'Eltra checks for a reply every 30 minutes.' };
-  }
-});
-tool({
-  name: 'install_check_send_sms', group: 'sms', action: true,
-  description: 'Step 2 (text): send the customer a short text asking whether the proposed install date suits, and track it on the job so Eltra watches for the reply. Use the mobile and text from install_date_check. One Approve card per text.',
-  input_schema: { type: 'object', properties: { ...CHECK_FIELDS, to: { type: 'string', description: 'customer mobile' }, message: { type: 'string' }, email: { type: 'string', description: 'customer email, used if a GoHighLevel contact has to be made' } }, required: ['customer', 'date', 'to', 'message'] },
-  async describe(i) {
-    const ok = auMobile(i.to);
-    return { title: 'Ask ' + i.customer + ' about their install date (text)', lines: ['To: ' + (ok ? auMobileLocal(ok) : i.to + ' (not an Australian mobile, so this will fail)'), 'From: ' + smsSender()].concat(smsProvider() === 'ghl' ? ['Uses their GoHighLevel contact (made if they don’t have one).'] : [], ['Eltra will watch for their reply and track it on the job.', HOLD_LINE(i)]), preview: i.message };
-  },
-  async run(i) {
-    const day = checkDay(i.date);
-    const sent = await sendSms({ to: i.to, body: i.message, name: i.customer, email: i.email });
-    const { recordAsked } = await import('./install-check.mjs');
-    const check = await recordAsked({ customer: i.customer, projectId: i.project_id, day, via: 'sms', detail: { provider: sent.provider, to: sent.to, id: sent.id, conversationId: sent.conversationId, contactId: sent.contactId } });
-    return { sent: true, to: sent.to, check };
-  }
-});
-tool({
-  name: 'install_check_update', group: 'core',
-  description: 'Set the answer to an install date check by hand, when Will or Ethan says the customer has answered some other way (rang, told them on site) or the check is no longer needed. outcome confirmed also records the install date (no need to call job_install_date) and renames the calendar hold to "Install – <customer name>"; declined, other_date and cancelled remove the hold (cancelled also releases the date when there has been no reply). other_date: put their suggested day in suggested_date.',
-  input_schema: { type: 'object', properties: { customer: { type: 'string' }, outcome: { type: 'string', enum: ['confirmed', 'declined', 'other_date', 'cancelled'] }, suggested_date: { type: 'string' }, note: { type: 'string', description: 'what the customer said, in a few words' } }, required: ['customer', 'outcome'] },
-  async run({ customer, outcome, suggested_date, note }) {
-    const { settleCheck } = await import('./install-check.mjs');
-    return settleCheck({ customer, outcome, suggested: suggested_date ? parseDay(suggested_date) : undefined, note });
   }
 });
 
@@ -1184,6 +908,6 @@ tool({
 
 // Tools available right now (only the systems that are set up)
 export function activeTools() {
-  return T.filter((t) => t.group === 'google' ? !!process.env.GOOGLE_CLIENT_ID : t.group === 'ghl' ? ghlReady() : t.group === 'sm8' ? sm8Ready() : t.group === 'pylon' ? pylonReady() : t.group === 'instagram' ? igSetUp() : t.group === 'sms' ? smsReady() : true);
+  return T.filter((t) => t.group === 'google' ? !!process.env.GOOGLE_CLIENT_ID : t.group === 'ghl' ? ghlReady() : t.group === 'sm8' ? sm8Ready() : t.group === 'pylon' ? pylonReady() : t.group === 'instagram' ? igSetUp() : true);
 }
 export const toolByName = (n) => T.find((t) => t.name === n);
