@@ -1218,7 +1218,8 @@
     var items = impShowDone ? active.concat(done) : active;
     var box = $('impList'); box.textContent = '';
     var learned = all.filter(function (x) { return x.kind === 'behaviour' && x.status === 'live'; });
-    $('impPanel').hidden = !all.length;
+    $('impPanel').hidden = !all.length && isEthan();   // Will always sees it, for “Install an update”
+    $('impUp').hidden = isEthan();
     $('impCount').textContent = active.length + ' pending';
     $('impLearnedCount').textContent = learned.length ? learned.length + ' learned' : '';
     if (learned.length) {
@@ -1229,15 +1230,16 @@
     }
     if (!items.length) { var none = document.createElement('p'); none.className = 'imp-none'; none.textContent = done.length ? 'Nothing waiting. Tick “Show completed” to see past ideas.' : 'Nothing waiting.'; box.appendChild(none); }
     items.forEach(function (it) {
-      var b = it.build || {}, feature = it.kind !== 'behaviour', tgt = it.target || 'eltra', can = IMP.canBuild && IMP.canBuild[tgt];
+      var b = it.build || {}, feature = it.kind !== 'behaviour', upd = it.kind === 'update', tgt = it.target || 'eltra', can = IMP.canBuild && IMP.canBuild[tgt];
       var el = document.createElement('div'); el.className = 'imp' + (impOpen[it.id] ? ' open' : '') + (IMP_ACTIVE.indexOf(it.status) < 0 ? ' past' : '');
       var line = '<div class="line"><button type="button" class="tt" aria-expanded="' + (impOpen[it.id] ? 'true' : 'false') + '"><span class="car" aria-hidden="true">▸</span><b>' + esc(it.title) + '</b></button><span class="st st-' + esc(it.status) + '">' + esc(IMP_STATUS[it.status] || it.status) + '</span><span class="qa"></span></div>';
-      var head = '<div class="t"><span class="k">' + (feature ? 'New feature · ' + APPNAME[tgt] : 'How Eltra works · goes live on approval') + '</span></div>';
+      var head = '<div class="t"><span class="k">' + (upd ? 'Uploaded update · ' + APPNAME[tgt] : feature ? 'New feature · ' + APPNAME[tgt] : 'How Eltra works · goes live on approval') + '</span></div>';
       var body = '';
       if (['proposed', 'approved', 'rejected'].indexOf(it.status) >= 0 || (it.status === 'live' && !b.liveAt)) body = '<div class="why">' + esc(it.why) + '</div><div class="chg">' + esc(it.change) + '</div>';
-      if (it.status === 'building') body = '<div class="bstat">⏳ Claude is building it in ' + APPNAME[tgt] + '’s code. Usually 2 to 10 minutes; the preview appears here when it’s ready. ' + (b.issueUrl ? '<a href="' + esc(b.issueUrl) + '" target="_blank" rel="noopener">See it on GitHub</a>' : '') + '</div>';
-      if (it.status === 'built') body = '<div class="bstat ok">✅ Built. Try the preview, then make it live.</div>' + (b.summary ? '<details class="sum"><summary>What Claude changed</summary><pre>' + esc(b.summary) + '</pre></details>' : '');
-      if (it.status === 'failed') body = '<div class="bstat err">Didn’t build: ' + esc(b.error || b.lastError || 'unknown problem') + (b.issueUrl ? ' <a href="' + esc(b.issueUrl) + '" target="_blank" rel="noopener">Open on GitHub</a>' : '') + '</div>';
+      if (it.status === 'building' && upd) body = '<div class="bstat">⏳ Netlify is building a preview of this update. Usually 1 to 3 minutes; it appears here when it’s ready. ' + (b.prUrl ? '<a href="' + esc(b.prUrl) + '" target="_blank" rel="noopener">See it on GitHub</a>' : '') + '</div>' + (b.summary ? '<details class="sum"><summary>What’s in the update</summary><pre>' + esc(b.summary) + '</pre></details>' : '');
+      else if (it.status === 'building') body = '<div class="bstat">⏳ Claude is building it in ' + APPNAME[tgt] + '’s code. Usually 2 to 10 minutes; the preview appears here when it’s ready. ' + (b.issueUrl ? '<a href="' + esc(b.issueUrl) + '" target="_blank" rel="noopener">See it on GitHub</a>' : '') + '</div>';
+      if (it.status === 'built') body = '<div class="bstat ok">✅ Built. Try the preview, then make it live.</div>' + (b.summary ? '<details class="sum"><summary>' + (upd ? 'What’s in the update' : 'What Claude changed') + '</summary><pre>' + esc(b.summary) + '</pre></details>' : '');
+      if (it.status === 'failed') body = '<div class="bstat err">Didn’t build: ' + esc(b.error || b.lastError || 'unknown problem') + (b.issueUrl || b.prUrl ? ' <a href="' + esc(b.issueUrl || b.prUrl) + '" target="_blank" rel="noopener">Open on GitHub</a>' : '') + '</div>';
       if (it.status === 'live' && b.liveAt) body = '<div class="bstat ok">Live since ' + esc(new Date(b.liveAt).toLocaleString('en-AU', { timeZone: TZ, weekday: 'short', hour: 'numeric', minute: '2-digit' })) + '.' + (b.prUrl ? ' <a href="' + esc(b.prUrl) + '" target="_blank" rel="noopener">The change on GitHub</a>' : '') + '</div>';
       if (it.status === 'undone') body = '<div class="bstat">Undone: the previous version is live again' + (b.revertIssue ? ', and Claude is reverting the code (<a href="' + esc(b.revertIssue) + '" target="_blank" rel="noopener">GitHub</a>)' : '') + '.</div>';
       el.innerHTML = line + '<div class="more"' + (impOpen[it.id] ? '' : ' hidden') + '>' + head + body + '<div class="row"></div></div>';
@@ -1261,7 +1263,7 @@
         add('Make it live', b.previewUrl ? 'no' : '', function (e) { if (!confirm('Make this change live in ' + APPNAME[tgt] + '?')) return; e.target.disabled = true; e.target.textContent = 'Going live…'; impCall({ id: it.id, action: 'live' }); });
         add('Discard', 'no', function () { if (confirm('Throw this change away?')) impCall({ id: it.id, action: 'discard' }); });
       } else if (it.status === 'failed') {
-        add('Try again', '', function () { impCall({ id: it.id, action: 'retry' }); });
+        if (!upd) add('Try again', '', function () { impCall({ id: it.id, action: 'retry' }); });
         add('Discard', 'no', function () { impCall({ id: it.id, action: 'discard' }); });
       } else if (it.status === 'live' && b.previousDeploy) {
         add('Undo', 'no', function () { if (confirm('Put the previous version of ' + APPNAME[tgt] + ' back live?')) impCall({ id: it.id, action: 'undo' }); });
@@ -1281,6 +1283,81 @@
       btn.disabled = false; btn.textContent = 'Approve'; if (!/logins|sensitive/i.test(e.message)) alert(e.message);
     });
   }
+  // ---- install an update from a zip (Will only): read the zip here, confirm the file list, then open a pull request ----
+  var impUp = null;   // { target, name, files: [{ path, data }] } waiting for Will's OK
+  function upMsg(t, err) { var m = $('impUpMsg'); m.textContent = t || ''; m.hidden = !t; m.className = 'impupmsg' + (err ? ' err' : ''); }
+  function upReset() { impUp = null; $('impUpFile').value = ''; $('impUpList').textContent = ''; $('impUpRow').hidden = true; upMsg(''); }
+  $('impUpBtn').onclick = function () { var f = $('impUpForm'), open = f.hidden; f.hidden = !open; $('impUpBtn').setAttribute('aria-expanded', open ? 'true' : 'false'); if (!open) upReset(); };
+  $('impUpCancel').onclick = function () { upReset(); $('impUpForm').hidden = true; $('impUpBtn').setAttribute('aria-expanded', 'false'); };
+  $('impUpApp').onchange = function () { if (impUp) impUp.target = $('impUpApp').value; };
+  // read a .zip with no libraries: the central directory lists the files; entries are stored or deflated
+  function readZip(buf) {
+    var dv = new DataView(buf), u8 = new Uint8Array(buf), end = -1;
+    for (var i = buf.byteLength - 22; i >= Math.max(0, buf.byteLength - 65557); i--) if (dv.getUint32(i, true) === 0x06054b50) { end = i; break; }
+    if (end < 0) return Promise.reject(new Error('That doesn’t look like a zip file.'));
+    var count = dv.getUint16(end + 10, true), off = dv.getUint32(end + 16, true);
+    if (count === 0xffff || off === 0xffffffff) return Promise.reject(new Error('That zip is too big to read here.'));
+    var dec = new TextDecoder(), list = [];
+    for (var n = 0; n < count; n++) {
+      if (off + 46 > buf.byteLength || dv.getUint32(off, true) !== 0x02014b50) return Promise.reject(new Error('That zip file looks damaged.'));
+      var flags = dv.getUint16(off + 8, true), method = dv.getUint16(off + 10, true), csize = dv.getUint32(off + 20, true), size = dv.getUint32(off + 24, true);
+      var nl = dv.getUint16(off + 28, true), xl = dv.getUint16(off + 30, true), cl = dv.getUint16(off + 32, true), local = dv.getUint32(off + 42, true);
+      list.push({ name: dec.decode(u8.subarray(off + 46, off + 46 + nl)).replace(/\\/g, '/'), flags: flags, method: method, csize: csize, size: size, local: local });
+      off += 46 + nl + xl + cl;
+    }
+    return list.map(function (e) {
+      e.read = function () {
+        if (e.flags & 1) return Promise.reject(new Error(e.name + ' is password-protected.'));
+        if (dv.getUint32(e.local, true) !== 0x04034b50) return Promise.reject(new Error('That zip file looks damaged.'));
+        var start = e.local + 30 + dv.getUint16(e.local + 26, true) + dv.getUint16(e.local + 28, true), data = u8.subarray(start, start + e.csize);
+        if (e.method === 0) return Promise.resolve(data);
+        if (e.method !== 8) return Promise.reject(new Error(e.name + ' uses a zip format I can’t read.'));
+        if (typeof DecompressionStream === 'undefined') return Promise.reject(new Error('This browser can’t unzip files. Try Chrome or Safari.'));
+        return new Response(new Blob([data]).stream().pipeThrough(new DecompressionStream('deflate-raw'))).arrayBuffer().then(function (ab) { return new Uint8Array(ab); });
+      };
+      return e;
+    });
+  }
+  function toB64(u8) { var s = '', CH = 0x8000; for (var i = 0; i < u8.length; i += CH) s += String.fromCharCode.apply(null, u8.subarray(i, i + CH)); return btoa(s); }
+  function upKeep(p) { return /^(netlify|public)\/./.test(p) || /^[^\/]+\.md$/i.test(p); }
+  $('impUpFile').onchange = function () {
+    var file = $('impUpFile').files[0]; impUp = null; $('impUpList').textContent = ''; $('impUpRow').hidden = true;
+    if (!file) return upMsg('');
+    if (file.size > 20 * 1024 * 1024) return upMsg('That zip is too big (20 MB max).', true);
+    upMsg('Reading ' + file.name + '…');
+    file.arrayBuffer().then(readZip).then(function (entries) {
+      // drop folders and Mac clutter, then strip one wrapper folder if everything sits inside it
+      var es = entries.filter(function (e) { return !/\/$/.test(e.name) && !/(^|\/)__MACOSX\//.test(e.name) && !/(^|\/)\.DS_Store$/.test(e.name); });
+      var tops = {}; es.forEach(function (e) { tops[e.name.indexOf('/') > 0 ? e.name.split('/')[0] : ''] = 1; });
+      var top = Object.keys(tops);
+      if (top.length === 1 && top[0] && !/^(netlify|public)$/.test(top[0])) es.forEach(function (e) { e.name = e.name.slice(top[0].length + 1); });
+      var keep = es.filter(function (e) { return upKeep(e.name) && !/(^|\/)\.\.?(\/|$)|\/\//.test(e.name); }), skipped = es.length - keep.length;
+      if (!keep.length) throw new Error('There’s nothing to install: the zip needs files in netlify/, public/ or top-level .md files.');
+      return Promise.all(keep.map(function (e) { return e.read().then(function (d) { return { path: e.name, size: d.length, data: toB64(d) }; }); })).then(function (files) {
+        files.sort(function (a, b) { return a.path.localeCompare(b.path); });
+        var bytes = JSON.stringify(files).length;
+        if (bytes > 4.9 * 1024 * 1024) throw new Error('That update is too big to install from here (5 MB max once packed).');
+        var tgt = $('impUpApp').value;
+        impUp = { target: tgt, name: file.name, files: files.map(function (f) { return { path: f.path, data: f.data }; }) };
+        var kb = function (n) { return n < 1024 ? n + ' B' : Math.round(n / 102.4) / 10 + ' KB'; };
+        $('impUpList').innerHTML = '<ul class="impupl">' + files.map(function (f) { return '<li>' + esc(f.path) + ' <small>' + kb(f.size) + '</small></li>'; }).join('') + '</ul>';
+        upMsg(files.length + ' file' + (files.length === 1 ? '' : 's') + ' to install' + (skipped ? ' (' + skipped + ' other file' + (skipped === 1 ? '' : 's') + ' ignored)' : '') + '. Check the list and pick the app, then Install. Nothing goes live until you press “Make it live”.');
+        $('impUpRow').hidden = false;
+      });
+    }).catch(function (e) { impUp = null; upMsg(e.message, true); });
+  };
+  $('impUpGo').onclick = function () {
+    if (!impUp) return;
+    var tgt = $('impUpApp').value, go = $('impUpGo');
+    if (IMP.canBuild && !IMP.canBuild[tgt]) return upMsg('Code updates for ' + APPNAME[tgt] + ' aren’t set up yet (GitHub token or repo missing in Netlify).', true);
+    if (!confirm('Install these ' + impUp.files.length + ' files into ' + APPNAME[tgt] + '? This makes a preview first; it goes live only when you press “Make it live”.')) return;
+    go.disabled = true; go.textContent = 'Installing…'; upMsg('Sending the files to GitHub…');
+    api('install-update', { method: 'POST', body: { target: tgt, name: impUp.name, files: impUp.files } }).then(function (d) {
+      upReset(); $('impUpForm').hidden = true; $('impUpBtn').setAttribute('aria-expanded', 'false');
+      if (d.item) impOpen[d.item.id] = true;
+      return loadImprove();
+    }).catch(function (e) { upMsg(e.message, true); }).then(function () { go.disabled = false; go.textContent = 'Install'; });
+  };
   function decideImp(id, action) { api('improve', { method: 'POST', body: { id: id, action: action } }).then(renderImprove).catch(function () {}); }
 
   // ================= to-do list =================

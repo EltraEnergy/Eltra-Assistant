@@ -433,6 +433,14 @@
   .bstat { font-size: 14.5px; padding: 8px 10px; border-radius: 8px; background: var(--paper); } .bstat.ok { background: #E2F4EC; } .bstat.err { background: var(--red-soft); }
   .imp .sum summary { cursor: pointer; font-size: 14px; color: var(--blue); font-weight: 600; } .imp .sum pre { white-space: pre-wrap; font: inherit; font-size: 13.5px; background: var(--paper); border-radius: 8px; padding: 8px 10px; }
   .imp a.btn { display: inline-flex; align-items: center; text-decoration: none; }
+  .impup { display: grid; gap: 8px; padding: 4px 0 8px; } .impup > .btn { justify-self: start; }
+  .impupf { display: grid; gap: 8px; background: var(--paper); border-radius: 10px; padding: 10px 12px; }
+  .impupr { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: center; font-size: 14px; }
+  .impupr label { display: inline-flex; gap: 6px; align-items: center; flex-wrap: wrap; min-width: 0; max-width: 100%; }
+  .impupr select { font: inherit; font-size: 14px; color: var(--ink); background: #fff; border: 1px solid var(--line); border-radius: 8px; padding: 5px 7px; }
+  .impupr input[type=file] { font: inherit; font-size: 13.5px; max-width: 100%; }
+  .impupmsg { font-size: 14px; } .impupmsg.err { color: var(--red); }
+  .impupl { margin: 0; padding-left: 18px; font-size: 13.5px; max-height: 220px; overflow: auto; } .impupl small { color: var(--muted); }
   /* improvements: keep everything inside the card on phones */
   .improve, .improve * { box-sizing: border-box; }
   .improve { max-width: 100%; overflow-wrap: anywhere; }
@@ -545,7 +553,19 @@
   </section>
   <section class="hud improve" aria-labelledby="impH" id="impPanel" hidden>
     <div class="hh"><h2 id="impH"><button type="button" class="imptog" id="impToggle" aria-expanded="true" aria-controls="impBody"><span class="car" aria-hidden="true">▸</span><span class="impt">Eltra’s improvement ideas</span> <span class="impn" id="impCount"></span></button></h2><small><span id="impLearnedCount"></span><label class="impdone"><input type="checkbox" id="impShowDone"> Show completed</label></small></div>
-    <div class="hb" id="impBody"><div id="impList"></div></div>
+    <div class="hb" id="impBody">
+      <div class="impup" id="impUp" hidden>
+        <button type="button" class="btn no sm" id="impUpBtn" aria-expanded="false" aria-controls="impUpForm">Install an update</button>
+        <div class="impupf" id="impUpForm" hidden>
+          <div class="impupr"><label>App <select id="impUpApp"><option value="eltra">Eltra</option><option value="quote">Quote app</option></select></label>
+            <label>Update zip <input type="file" id="impUpFile" accept=".zip,application/zip,application/x-zip-compressed"></label></div>
+          <div class="impupmsg" id="impUpMsg" hidden></div>
+          <div id="impUpList"></div>
+          <div class="row" id="impUpRow" hidden><button type="button" class="btn sm" id="impUpGo">Install</button><button type="button" class="btn sm no" id="impUpCancel">Cancel</button></div>
+        </div>
+      </div>
+      <div id="impList"></div>
+    </div>
   </section>
   <div class="cols">
     <section class="hud" aria-labelledby="calH">

@@ -100,6 +100,44 @@ export async function undoBuild(b) {
 // discard a build that wasn't wanted
 export async function discardBuild(b) {
   if (b.pr) await gh('/repos/' + b.repo + '/pulls/' + b.pr, { method: 'PATCH', body: { state: 'closed' } }).catch(() => {});
-  await gh('/repos/' + b.repo + '/issues/' + b.issue, { method: 'PATCH', body: { state: 'closed' } }).catch(() => {});
+  if (b.issue) await gh('/repos/' + b.repo + '/issues/' + b.issue, { method: 'PATCH', body: { state: 'closed' } }).catch(() => {});
   b.status = 'discarded'; return b;
+}
+
+// Install an update Will uploaded as a zip: files go on a new branch update/<date-time> in one commit, and a pull request
+// opens. No issue (nobody needs to build it); checkBuild then finds the deploy preview, and makeLive / undoBuild work as usual.
+// files: [{ path, data (base64) }], already checked to be under netlify/, public/ or a top-level .md file.
+export const UPDATE_PATH = (p) => typeof p === 'string' && p.length < 300 && !/(^|\/)\.\.?(\/|$)|\\|\/\/|[\x00-\x1f]/.test(p) && (/^(netlify|public)\/./.test(p) || /^[^/]+\.md$/i.test(p));
+export async function installUpdate(target, files, note = '') {
+  const T = TARGETS[target];
+  if (!T) throw new Error('Pick Eltra or the Quote app');
+  if (!buildReady(target)) throw new Error('Code updates for ' + T.name + ' aren’t set up yet (GitHub token or repo missing in Netlify).');
+  const repo = T.repo(), R = '/repos/' + repo;
+  const info = await gh(R), base = info.default_branch;
+  const head = await gh(R + '/git/ref/heads/' + encodeURIComponent(base));
+  const parent = await gh(R + '/git/commits/' + head.object.sha);
+  // text files go straight into the tree; anything else (images, fonts) becomes a blob first, a few at a time
+  const entries = files.map((f) => {
+    const buf = Buffer.from(f.data, 'base64'), text = buf.includes(0) ? null : new TextDecoder('utf-8', { fatal: true });
+    let content = null; try { if (text) content = text.decode(buf); } catch {}
+    return { path: f.path, buf, content };
+  });
+  const tree = new Array(entries.length);
+  const queue = entries.map((e, i) => [e, i]);
+  await Promise.all(Array.from({ length: 6 }, async () => {
+    for (let n = queue.shift(); n; n = queue.shift()) {
+      const [e, i] = n, mode = '100644';
+      if (e.content !== null) tree[i] = { path: e.path, mode, type: 'blob', content: e.content };
+      else { const bl = await gh(R + '/git/blobs', { method: 'POST', body: { content: e.buf.toString('base64'), encoding: 'base64' } }); tree[i] = { path: e.path, mode, type: 'blob', sha: bl.sha }; }
+    }
+  }));
+  const t = await gh(R + '/git/trees', { method: 'POST', body: { base_tree: parent.tree.sha, tree } });
+  if (t.sha === parent.tree.sha) throw new Error('Nothing to change: ' + T.name + ' already has exactly these files.');
+  const stamp = new Date().toLocaleString('sv-SE', { timeZone: 'Australia/Melbourne' }).replace(/\D/g, '').replace(/^(\d{8})(\d{6})$/, '$1-$2');
+  const branch = 'update/' + stamp, title = 'Install update ' + stamp.replace(/^(\d{4})(\d{2})(\d{2})-(\d{2})(\d{2}).*/, '$3/$2/$1 $4:$5');
+  const c = await gh(R + '/git/commits', { method: 'POST', body: { message: title + ' (uploaded by Will from Eltra)', tree: t.sha, parents: [parent.sha] } });
+  await gh(R + '/git/refs', { method: 'POST', body: { ref: 'refs/heads/' + branch, sha: c.sha } });
+  const list = files.map((f) => '- `' + f.path + '`').join('\n');
+  const pr = await gh(R + '/pulls', { method: 'POST', body: { title, head: branch, base, body: 'An update Will uploaded as a zip from Eltra’s dashboard' + (note ? ' (' + note + ')' : '') + '. Approve it there with “Make it live” once the deploy preview looks right.\n\nFiles (' + files.length + '):\n' + list.slice(0, 60000) } });
+  return { title, build: { target, repo, branch, pr: pr.number, prUrl: pr.html_url, status: 'building', startedAt: new Date().toISOString(), title, summary: 'Files in this update (' + files.length + '):\n' + files.map((f) => f.path).join('\n').slice(0, 880) } };
 }
