@@ -13,6 +13,7 @@ import crypto from 'node:crypto';
 
 const KEY = 'content', DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 const DEFAULTS = { days: [1, 3, 5, 0], time: '18:30', reelsPerWeek: 1, aheadDays: 8, paused: false };
+export const FORMATS = ['photo', 'carousel', 'reel', 'story'];
 const uid = () => crypto.randomBytes(5).toString('hex');
 
 export async function loadContent() {
@@ -73,14 +74,14 @@ export async function planSlots(d) {
   const ctx = await context(d);
   const ans = await claudeJSON({
     system: SYSTEM(ctx) + '\n\nPlanning guide (ig-plan):\n' + SKILLS['ig-plan'].body.slice(0, 3500),
-    prompt: 'Plan one post for each of these dates: ' + slots.map((x) => x + ' (' + DAYS[new Date(x + 'T12:00:00Z').getUTCDay()] + ')').join(', ') + '.\nFormats: "carousel" (most posts, can be posted automatically), "reel" (about ' + d.settings.reelsPerWeek + ' a week, Ethan films it), "story" (occasionally).\nRecent jobs to draw on:\n' + (ctx.jobs.join('\n') || 'none listed') + '\nRecent topics (don\'t repeat):\n' + (ctx.recentTopics.join('\n') || 'none') + '\nMix: real installs and results, explaining batteries/solar/rebates/bills, myths, behind the scenes. Each needs a specific angle.',
-    schema: { type: 'object', properties: { posts: { type: 'array', items: { type: 'object', properties: { date: { type: 'string' }, format: { type: 'string', enum: ['carousel', 'reel', 'story'] }, topic: { type: 'string', description: 'short title' }, angle: { type: 'string', description: 'the specific point or story, one or two sentences' } }, required: ['date', 'format', 'topic', 'angle'] } } }, required: ['posts'] }
+    prompt: 'Plan one post for each of these dates: ' + slots.map((x) => x + ' (' + DAYS[new Date(x + 'T12:00:00Z').getUTCDay()] + ')').join(', ') + '.\nFormats: "carousel" (most posts, can be posted automatically), "photo" (a single photo post, when a real job photo tells the story best; Ethan attaches the photo and Eltra posts it), "reel" (about ' + d.settings.reelsPerWeek + ' a week, Ethan films it), "story" (occasionally).\nRecent jobs to draw on:\n' + (ctx.jobs.join('\n') || 'none listed') + '\nRecent topics (don\'t repeat):\n' + (ctx.recentTopics.join('\n') || 'none') + '\nMix: real installs and results, explaining batteries/solar/rebates/bills, myths, behind the scenes. Each needs a specific angle.',
+    schema: { type: 'object', properties: { posts: { type: 'array', items: { type: 'object', properties: { date: { type: 'string' }, format: { type: 'string', enum: FORMATS }, topic: { type: 'string', description: 'short title' }, angle: { type: 'string', description: 'the specific point or story, one or two sentences' } }, required: ['date', 'format', 'topic', 'angle'] } } }, required: ['posts'] }
   });
   let n = 0;
   for (const p of ans.posts || []) {
     if (!slots.includes(p.date) || d.items.some((x) => x.date === p.date && x.status !== 'skipped')) continue;
     if ((d.removed || []).some((x) => x.date === p.date || sameTopic(x.topic, p.topic))) continue;
-    d.items.push({ id: uid(), date: p.date, at: slotTime(p.date, d.settings.time), format: p.format, topic: String(p.topic).slice(0, 120), angle: String(p.angle).slice(0, 400), status: 'planned', createdAt: new Date().toISOString() }); n++;
+    d.items.push({ id: uid(), date: p.date, at: slotTime(p.date, d.settings.time), format: FORMATS.includes(p.format) ? p.format : 'carousel', topic: String(p.topic).slice(0, 120), angle: String(p.angle).slice(0, 400), status: 'planned', createdAt: new Date().toISOString() }); n++;
   }
   if (n) note(d, 'Planned ' + n + ' post' + (n > 1 ? 's' : ''));
   return n;
@@ -97,6 +98,13 @@ export async function draftOne(d, id) {
       schema: { type: 'object', properties: { slides: { type: 'array', items: { type: 'object', properties: { heading: { type: 'string' }, body: { type: 'string' } }, required: ['heading'] } }, caption: { type: 'string' } }, required: ['slides', 'caption'] }, maxTokens: 2200 });
     const h = humanize(a.caption);
     it.slides = (a.slides || []).slice(0, 10).map((s) => ({ heading: humanize(s.heading).text, body: s.body ? humanize(s.body).text : '' }));
+    it.caption = h.text; it.check = { verdict: detect(h.text).verdict, caption: captionLint(h.text).verdict, flags: h.flags.slice(0, 4) };
+  } else if (it.format === 'photo') {
+    const a = await claudeJSON({ system: sys + '\n\nCaption guide:\n' + SKILLS['ig-caption'].body.slice(0, 3500),
+      prompt: 'Write a single-photo Instagram post for ' + it.date + '. Topic: ' + it.topic + '. Angle: ' + it.angle + (it.feedback ? '\nChanges asked for: ' + it.feedback : '') + '\nRecent jobs:\n' + (ctx.jobs.join('\n') || 'none') + '\nThis is one photo, not a carousel: no slides and no text on the image. Say what photo to use (one or two lines, e.g. a real install shot), then the caption (first line works before "… more", one ask, up to 5 specific hashtags at the end).',
+      schema: { type: 'object', properties: { photo: { type: 'string', description: 'what photo to use' }, caption: { type: 'string' } }, required: ['photo', 'caption'] }, maxTokens: 1500 });
+    const h = humanize(a.caption);
+    it.photo = String(a.photo || '').slice(0, 400);
     it.caption = h.text; it.check = { verdict: detect(h.text).verdict, caption: captionLint(h.text).verdict, flags: h.flags.slice(0, 4) };
   } else if (it.format === 'reel') {
     const a = await claudeJSON({ system: sys + '\n\nReel guide:\n' + SKILLS['ig-reel'].body.slice(0, 4000),
@@ -117,7 +125,7 @@ export async function draftOne(d, id) {
   return it;
 }
 
-// 3. post approved carousels when their time comes; remind about Reels and stories on the day
+// 3. post approved carousels when their time comes; remind about photos, Reels and stories on the day
 export async function publishDue(d) {
   const now = Date.now(), done = [];
   for (const it of d.items) {
@@ -127,7 +135,7 @@ export async function publishDue(d) {
     }
     if (it.status === 'manual' && !it.reminded && it.date <= melbToday(0)) {
       it.reminded = true;
-      await addTodo({ section: 'Socials', text: (it.format === 'reel' ? 'Film and post the Reel: ' : 'Post the story: ') + it.topic, due: it.date, owner: 'ethan', ref: 'auto' }).catch(() => {});
+      await addTodo({ section: 'Socials', text: (it.format === 'reel' ? 'Film and post the Reel: ' : it.format === 'photo' ? 'Post the photo (Content schedule › Post to Instagram): ' : 'Post the story: ') + it.topic, due: it.date, owner: 'ethan', ref: 'auto' }).catch(() => {});
     }
   }
   if (done.length) note(d, 'Posted: ' + done.join(', '));
@@ -189,6 +197,14 @@ export async function updateItem(id, patch, by = currentUser()) {
   for (const k of ['caption', 'topic', 'angle', 'date', 'feedback']) if (patch[k] !== undefined) it[k] = String(patch[k]).slice(0, 2200);
   if (patch.slides) it.slides = patch.slides.slice(0, 10).map((s) => ({ heading: String(s.heading || '').slice(0, 120), body: String(s.body || '').slice(0, 300) }));
   if (patch.date || patch.time) it.at = slotTime(it.date, patch.time || d.settings.time);
+  // a new format means a new draft: drop the old format's parts and redraft it in the new one
+  if (patch.format !== undefined && patch.format !== it.format) {
+    if (!FORMATS.includes(patch.format)) throw new Error('Format must be one of: ' + FORMATS.join(', '));
+    if (it.status === 'posted') throw new Error('That post has already gone out');
+    it.format = patch.format; it.status = 'planned';
+    for (const k of ['slides', 'photo', 'hooks', 'script', 'shots', 'beats', 'frames', 'image_urls', 'check', 'approvedBy', 'approvedAt', 'reminded', 'error']) delete it[k];
+    if (patch.action === 'approve') delete patch.action;
+  }
   if (patch.action === 'approve') {
     if (it.format === 'carousel') { if (!patch.image_urls || !patch.image_urls.length) throw new Error('No slide images'); it.image_urls = patch.image_urls.slice(0, 10); it.status = 'scheduled'; }
     else it.status = 'manual';
@@ -220,5 +236,12 @@ export async function saveSettings(patch) {
   if (patch.reelsPerWeek !== undefined) s.reelsPerWeek = Math.max(0, Math.min(5, +patch.reelsPerWeek || 0));
   if (patch.paused !== undefined) s.paused = !!patch.paused;
   await saveContent(d); return s;
+}
+// a photo slot posted from the chat with instagram_post
+export async function markPosted(id, link) {
+  const d = await loadContent(), it = d.items.find((x) => x.id === id); if (!it) return null;
+  it.status = 'posted'; it.link = link || it.link; it.postedAt = new Date().toISOString(); delete it.error;
+  note(d, 'Posted: ' + it.topic);
+  await saveContent(d); return it;
 }
 export { saveContent };

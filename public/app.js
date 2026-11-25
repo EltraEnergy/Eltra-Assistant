@@ -1126,7 +1126,7 @@
     if (!items.length) { var e = document.createElement('p'); e.className = 'note'; e.textContent = 'Eltra is planning the week. Drafts appear here within about half an hour, and each one waits for your OK.'; list.appendChild(e); }
     items.forEach(function (it) {
       var w = whenText(it), b = document.createElement('button'); b.type = 'button'; b.className = 'crow'; b.setAttribute('role', 'row');
-      b.innerHTML = '<span class="when"><b>' + esc(w.day) + '</b><small>' + esc(w.time) + '</small></span><span class="fmt">' + esc(it.format) + '</span><span class="topic">' + esc(it.topic) + '</span><span class="st ' + esc(it.status) + '">' + esc(STATUS[it.status] || it.status) + '</span>';
+      b.innerHTML = '<span class="when"><b>' + esc(w.day) + '</b><small>' + esc(w.time) + '</small></span><span class="fmt">' + esc(it.format) + '</span><span class="topic">' + esc(it.topic) + '</span><span class="st ' + esc(it.status) + '">' + esc(it.status === 'manual' && it.format === 'photo' ? 'To post' : STATUS[it.status] || it.status) + '</span>';
       b.onclick = function () { showPost(it.id); };
       list.appendChild(b);
     });
@@ -1161,6 +1161,7 @@
       h += it.slides.map(function (sl, i) { return '<div class="sl"><span>' + (i + 1) + '</span><input data-sh="' + i + '" value="' + esc(sl.heading) + '" aria-label="Slide ' + (i + 1) + ' heading"' + (editable ? '' : ' disabled') + '><input data-sb="' + i + '" value="' + esc(sl.body || '') + '" aria-label="Slide ' + (i + 1) + ' text"' + (editable ? '' : ' disabled') + '></div>'; }).join('');
     }
     if (it.format === 'reel' && it.script) h += '<div><div class="meta">Hooks, scored</div><ul>' + (it.hooks || []).map(function (x) { return '<li>' + esc(x) + '</li>'; }).join('') + '</ul></div><label>Script<pre>' + esc(it.script) + '</pre></label>' + (it.shots ? '<label>What to film<pre>' + esc(it.shots) + '</pre></label>' : '') + (it.beats && it.beats.length ? '<div class="meta">' + it.beats.map(esc).join('<br>') + '</div>' : '');
+    if (it.format === 'photo' && it.photo) h += '<label>Photo to use<pre>' + esc(it.photo) + '</pre></label>';
     if (it.format === 'story' && it.frames) h += '<label>Story frames<pre>' + it.frames.map(function (x, i) { return (i + 1) + '. ' + esc(x); }).join('\n') + '</pre></label>';
     if (it.format !== 'story' && it.caption != null && it.status !== 'planned') h += '<label>Caption<textarea id="pdCap"' + (editable ? '' : ' disabled') + '>' + esc(it.caption || '') + '</textarea></label>' + (it.check ? '<div class="meta">Checks: ' + esc([it.check.verdict && 'humanizer ' + it.check.verdict, it.check.caption && 'caption ' + it.check.caption, it.check.hook && 'hook ' + it.check.hook].filter(Boolean).join(' · ')) + '</div>' : '');
     if (it.status === 'posted') h += '<p><a href="' + esc(it.link || '#') + '" target="_blank" rel="noopener">View the post on Instagram</a></p>';
@@ -1176,6 +1177,8 @@
       btn('Redraft…', 'no', function () { var fb = prompt('What should Eltra change?'); if (fb !== null) postAction({ action: 'redraft', feedback: fb }); });
       btn('Save changes', 'no', function () { postAction(edits()); });
       btn(it.format === 'carousel' ? 'Approve & schedule' : 'Approve', '', function (e) { approvePost(it, e.target); });
+    } else if (it.status === 'manual' && it.format === 'photo') {
+      btn('Post to Instagram', '', function () { postPhoto(it); });
     } else if (it.status === 'scheduled') {
       btn('Unschedule', 'no', function () { postAction({ action: 'unapprove' }); });
     } else if (it.status === 'planned') {
@@ -1201,6 +1204,15 @@
       return Promise.all(car.slides.map(function (sl, i) { var cv = document.createElement('canvas'); cv.width = 1080; cv.height = 1350; drawSlide(cv, car, i, 1); return api('media', { method: 'POST', body: { data: cv.toDataURL('image/jpeg', 0.92), days: daysLeft } }); }));
     }).then(function (rs) { e.action = 'approve'; e.image_urls = rs.map(function (r) { return r.url; }); return postAction(e); })
       .catch(function (err) { b.disabled = false; b.textContent = 'Approve & schedule'; $('pdErr').textContent = err.message; $('pdErr').hidden = false; });
+  }
+  // a photo slot: attach the photo in the chat, and Eltra posts it with instagram_post using its "saved for posting" link
+  function postPhoto(it) {
+    if (!igConnected()) { $('pdErr').textContent = 'Connect Instagram first (Settings → Connections) so Eltra can post it.'; $('pdErr').hidden = false; return; }
+    var w = whenText(it);
+    $('postDlg').close(); openDrawer('chat');
+    $('askIn').value = 'Post this photo to Instagram for the ' + w.day + ' photo slot "' + it.topic + '" (content_id ' + it.id + ') with its caption from the schedule.';
+    $('vHint').textContent = 'Attach the photo, then send.';
+    $('attFile').click();
   }
   $('pdClose').onclick = function () { $('postDlg').close(); };
 
