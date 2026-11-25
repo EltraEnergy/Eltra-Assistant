@@ -43,7 +43,11 @@ export async function decide(id, action, by = currentUser(), opts = {}) {
     } else it.status = 'approved';
   }
   else if (action === 'target' && (opts.target === 'eltra' || opts.target === 'quote')) it.target = opts.target;
-  else if (action === 'live' && it.build && it.build.status === 'built') { await makeLive(it.build); it.status = 'live'; }
+  else if (action === 'live' && it.build && it.build.status === 'built') {
+    // keep the reason if it can't go live (e.g. a merge conflict) so Eltra can see it with improvements_list
+    try { await makeLive(it.build); } catch (e) { it.build.lastError = e.message; it.build.errorAt = new Date().toISOString(); await save(d); throw e; }
+    delete it.build.lastError; it.status = 'live';
+  }
   else if (action === 'undo' && it.build && it.build.status === 'live') { await undoBuild(it.build); it.status = 'undone'; }
   else if (action === 'discard' && it.build) { await discardBuild(it.build); it.status = 'rejected'; it.decidedAt = new Date().toISOString(); }
   else if (action === 'retry' && it.kind === 'feature') { it.build = { ...(await startBuild(it)), title: it.title }; it.status = 'building'; }

@@ -72,6 +72,11 @@ export async function checkBuild(b, title) {
     if (d && d.state === 'ready') { b.previewUrl = d.deploy_ssl_url || d.links && d.links.permalink; b.status = 'built'; }
     if (d && d.state === 'error') { b.status = 'failed'; b.error = 'The preview build failed on Netlify: ' + (d.error_message || 'see the deploy log') + '.'; }
   } else if (!site && b.pr) b.status = 'built';
+  // once built, note whether the pull request still merges cleanly (another change made live first can cause a conflict)
+  if (b.status === 'built' && b.pr) {
+    const pr = await gh('/repos/' + repo + '/pulls/' + b.pr).catch(() => null);
+    if (pr && typeof pr.mergeable === 'boolean') b.conflict = !pr.mergeable;
+  }
   return b;
 }
 

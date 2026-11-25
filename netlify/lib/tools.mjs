@@ -4,7 +4,7 @@ import { loadTodos, addTodo, updateTodo, addTodos, updateTodos, urgencyFor } fro
 import { currentUser } from './util.mjs';
 import { loadPrefs, portalFor } from './prefs.mjs';
 import { loadContent, updateItem, deleteItems, markPosted } from './content.mjs';
-import { addProposal, decide, loadImprove } from './improve.mjs';
+import { addProposal, decide, loadImprove, refreshBuilds } from './improve.mjs';
 import { loadJobs, saveJobs, setInstall, parseDay, findJob, normName, syncPreApprovals } from './jobs.mjs';
 import { jobFolderReport } from './jobfolders.mjs';
 import { smsReady, smsProvider, smsSender, sendSms, auMobile, auMobileLocal } from './sms.mjs';
@@ -1054,9 +1054,39 @@ tool({
 // ---------- Improving Eltra (proposals need approval) ----------
 tool({
   name: 'suggest_improvement', group: 'core',
-  description: 'Propose an improvement to yourself (Eltra) for Will or Ethan to approve on the dashboard. Use it when you were asked for something you can\'t do, when a tool keeps failing, or when you notice a better way of working. kind "behaviour": a change to how you work, written as one clear instruction to yourself in change; it goes live when approved. kind "feature": needs new code or a new connection, in Eltra or in the quote app (set app); put a short build brief in change. Approving a feature has Claude build it on GitHub, Will tries the preview, then makes it live. Don\'t propose things already possible.',
+  description: 'Propose an improvement to yourself (Eltra) for Will or Ethan to approve on the dashboard. Use it when you were asked for something you can\'t do, when a tool keeps failing, or when you notice a better way of working. kind "behaviour": a change to how you work, written as one clear instruction to yourself in change; it goes live when approved. kind "feature": needs new code or a new connection, in Eltra or in the quote app (set app); put a short build brief in change. Approving a feature has Claude build it on GitHub, Will tries the preview, then makes it live. Don\'t propose things already possible. Call improvements_list first so you don\'t propose something already waiting, building or live.',
   input_schema: { type: 'object', properties: { kind: { type: 'string', enum: ['behaviour', 'feature'] }, app: { type: 'string', enum: ['eltra', 'quote'], description: 'for a feature: which app the code change is for (Eltra herself, or the on-site quote app)' }, title: { type: 'string' }, why: { type: 'string' }, change: { type: 'string' } }, required: ['kind', 'title', 'why', 'change'] },
   async run(i) { const it = await addProposal({ ...i, target: i.app }, 'chat'); return { proposed: { id: it.id, title: it.title, kind: it.kind }, note: 'It\'s waiting for approval in the Improvements panel on the dashboard.' }; }
+});
+// what's in the Improvements panel and where each proposal is up to (read only)
+const IMP_STATUS = { proposed: 'waiting for approval', approved: 'approved, waiting to be built', building: 'building', built: 'built and ready to test', live: 'live', undone: 'undone', failed: 'failed' };
+const APP_NAME = { eltra: 'Eltra', quote: 'Quote app' };
+tool({
+  name: 'improvements_list', group: 'core',
+  description: 'Read only. Everything in the Improvements panel on the dashboard: each proposal\'s id, title, kind (behaviour, feature, or an uploaded update), app (Eltra or the quote app), status (waiting for approval, approved, building, built and ready to test, live, undone, discarded or failed), any error (such as a merge conflict or a failed preview build), what it changes, links, and when it was created and last changed. Use it to answer "what\'s in the improvements panel?", and always before suggest_improvement so you don\'t propose something already waiting, building or live. If two open proposals touch the same area (same files, panel or tool), warn Will and say which order to make them live in (usually the one built first, then retry the other). If one has a merge conflict, say so plainly and offer to send it again as a fresh proposal with suggest_improvement (give it a slightly different title, since the same title just finds the old one) and suggest discarding the old one in the panel.',
+  input_schema: { type: 'object', properties: { include_old: { type: 'boolean', description: 'also include proposals discarded more than 7 days ago (hidden from the panel)' } } },
+  async run({ include_old } = {}) {
+    const d = await refreshBuilds().catch(() => loadImprove());
+    const when = (t) => (t ? melbDate(t) : undefined);
+    const items = d.items.filter((x) => include_old || x.status !== 'rejected' || Date.now() - Date.parse(x.decidedAt || 0) < 7 * 864e5).map((x) => {
+      const b = x.build || {};
+      const times = [x.createdAt, x.decidedAt, b.startedAt, b.liveAt, b.undoneAt, b.errorAt].filter(Boolean).sort();
+      const open = !['live', 'undone'].includes(x.status);
+      const conflict = open && (!!b.conflict || /not mergeable|conflict/i.test(b.lastError || ''));
+      const error = conflict ? 'Merge conflict: this change clashes with code that went live after it was built, so it can\'t be made live as it is.' + (b.lastError ? ' (' + clip(b.lastError, 200) + ')' : '')
+        : open && (x.status === 'failed' || b.status === 'failed' || b.lastError) ? clip(b.error || b.lastError || 'unknown problem', 300) : undefined;
+      return {
+        id: x.id, title: x.title, kind: x.kind, app: x.kind === 'behaviour' ? 'Eltra (how she works)' : APP_NAME[x.target || 'eltra'] || x.target,
+        status: x.status === 'rejected' ? (b.status === 'discarded' ? 'discarded' : 'declined') : IMP_STATUS[x.status] || x.status,
+        error, merge_conflict: conflict || undefined,
+        why: clip(x.why, 300) || undefined, change: clip(x.change, 500) || undefined,
+        source: x.source, decided_by: x.decidedBy || undefined,
+        created: when(x.createdAt), last_changed: when(times[times.length - 1]),
+        issue: b.issueUrl || undefined, pull_request: b.prUrl || undefined, preview: b.status === 'built' ? b.previewUrl || undefined : undefined
+      };
+    });
+    return { count: items.length, items, note: items.length ? undefined : 'The Improvements panel is empty.' };
+  }
 });
 
 
