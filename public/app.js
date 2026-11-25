@@ -1442,7 +1442,8 @@
       tabBtn('All ' + openG.name, all, count(all), subs).onclick = function () { todoTab = all; renderTodos(); };
       openG.secs.forEach(function (sname) {
         var p = secParts(sname), n = count(sname);
-        if (todoWho !== 'all' && !n && sname !== todoTab) return;
+        // DNSP sub-sections always show, in their fixed order, even when empty (Will asked for this)
+        if (todoWho !== 'all' && !n && sname !== todoTab && !/^dnsp$/i.test(openG.name)) return;
         tabBtn(p ? p.sub : 'General', sname, n, subs).onclick = function () { todoTab = sname; $('todoSec').value = sname; renderTodos(); };
       });
     }
