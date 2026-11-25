@@ -395,25 +395,55 @@
   .evprep { font: inherit; font-size: 12.5px; font-weight: 700; color: var(--blue); background: var(--blue-soft); border: 0; border-radius: 999px; padding: 3px 10px; margin-left: 8px; cursor: pointer; vertical-align: middle; }
   .evprep:hover { filter: brightness(.96); }
   /* content schedule */
-  .ctable { display: grid; }
-  .crow { display: grid; grid-template-columns: 110px 90px minmax(0, 1fr) 110px; gap: 10px; align-items: center; padding: 10px 6px; border-top: 1px solid var(--line); cursor: pointer; border-radius: 8px; background: none; border-left: 0; border-right: 0; border-bottom: 0; font: inherit; color: inherit; text-align: left; width: 100%; }
-  .crow:hover { background: var(--paper); }
-  .crow .when b { display: block; font-size: 15px; } .crow .when small { color: var(--muted); font-size: 13px; }
-  .crow .topic { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .ctable { display: grid; min-width: 0; } .ctable > *, .cweek > * { min-width: 0; }
   .fmt { font-size: 12.5px; font-weight: 700; border-radius: 999px; padding: 3px 9px; background: var(--paper); color: var(--muted); justify-self: start; text-transform: capitalize; }
-  .st { font-size: 12.5px; font-weight: 700; border-radius: 999px; padding: 3px 9px; justify-self: start; }
-  .st.planned { background: var(--paper); color: var(--dim); } .st.draft { background: #FFF1DD; color: #A86200; }
-  .st.scheduled, .st.manual { background: var(--blue-soft); color: var(--blue); } .st.posted { background: #E2F4EC; color: #17845D; }
-  .st.failed { background: var(--red-soft); color: var(--red); } .st.skipped { background: var(--paper); color: var(--dim); text-decoration: line-through; }
-  @media (max-width: 640px) { .crow { grid-template-columns: 90px minmax(0, 1fr) 96px; } .crow .fmt { display: none; } }
+  /* status labels: one colour per status, the same everywhere in the panel */
+  .st { font-size: 12.5px; font-weight: 700; border-radius: 999px; padding: 3px 9px; justify-self: start; white-space: nowrap; border: 1px solid transparent; }
+  .st.planned { background: var(--paper); color: var(--muted); border-color: var(--line); }
+  .st.draft { background: var(--amber-soft); color: var(--amber); }
+  .st.scheduled { background: var(--blue-soft); color: var(--blue-deep); }
+  .st.manual { background: #F0E9FB; color: #6B3FB0; }
+  .st.posted { background: var(--green-soft); color: var(--green); }
+  .st.failed { background: var(--red-soft); color: var(--red); }
+  .st.skipped { background: var(--paper); color: var(--dim); text-decoration: line-through; }
+  .cbar { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin: 6px 0 4px; }
+  .cbar .note { margin: 0; flex: 1; min-width: 0; }
+  .cbar .btn { flex: none; white-space: nowrap; }
+  .cadd { margin: 6px 0 10px; }
+  .cweek { display: grid; gap: 10px; margin-top: 14px; }
+  .cwk { margin: 0; font-size: 13px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; color: var(--muted); padding-bottom: 6px; border-bottom: 1px solid var(--line); }
+  .cgap { margin: 0; padding: 0 2px; font-size: 13.5px; color: var(--dim); }
+  .ccard { display: grid; grid-template-columns: minmax(0, 1fr); gap: 6px; padding: 12px 14px; background: var(--surface); border: 1px solid var(--line); border-left: 4px solid var(--line); border-radius: 12px; min-width: 0; }
+  .ccard.st-draft { border-left-color: var(--amber); } .ccard.st-scheduled { border-left-color: var(--blue); } .ccard.st-manual { border-left-color: #6B3FB0; }
+  .ccard.st-posted { border-left-color: var(--green); } .ccard.st-failed { border-left-color: var(--red); } .ccard.st-skipped { opacity: .7; }
+  .chead { display: flex; align-items: center; gap: 8px; min-width: 0; font-size: 14px; color: var(--muted); }
+  .chead .when { white-space: nowrap; } .chead .when b { color: var(--ink); }
+  .chead .st { margin-left: auto; }
+  .ctopic { font: inherit; font-weight: 700; font-size: 16px; color: var(--ink); background: none; border: 0; padding: 0; text-align: left; cursor: pointer; overflow-wrap: anywhere; }
+  .ctopic:hover { color: var(--blue); text-decoration: underline; }
+  .ccap { margin: 0; font-size: 14.5px; color: var(--ink); white-space: pre-line; overflow-wrap: anywhere; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; overflow: hidden; }
+  .ccap.angle { color: var(--muted); font-style: italic; }
+  .ccard.open .ccap { display: block; -webkit-line-clamp: unset; line-clamp: unset; overflow: visible; }
+  .cmore { justify-self: start; font: inherit; font-size: 13.5px; font-weight: 600; color: var(--blue); background: none; border: 0; padding: 0; cursor: pointer; }
+  .cacts { display: flex; align-items: center; gap: 8px; margin-top: 4px; padding-top: 10px; border-top: 1px solid var(--line); }
+  .cacts .btn.sm { min-height: 36px; min-width: 76px; padding: 4px 14px; white-space: nowrap; }
+  .cacts .btn.ca-del { margin-left: auto; min-width: 0; min-height: 32px; padding: 2px 10px; font-size: 13px; font-weight: 500; color: var(--muted); border-color: transparent; background: transparent; }
+  .cacts .btn.ca-del:hover { color: var(--red); background: var(--red-soft); border-color: transparent; }
+  .cclear { justify-self: start; margin-top: 12px; }
+  @media (max-width: 560px) {
+    .cbar { flex-wrap: wrap; } .cbar .btn { width: 100%; }
+    .ccard { padding: 10px 12px; }
+    .chead { flex-wrap: wrap; row-gap: 4px; }
+    .cacts { gap: 4px; }
+    .cacts .btn.sm { flex: 1 1 auto; min-width: 0; padding: 4px 6px; font-size: 13px; }
+    .cacts .btn.ca-del { flex: 0 0 auto; padding: 2px 6px; font-size: 12.5px; }
+  }
+  @media (max-width: 380px) { .ccard { padding: 10px 8px 10px 10px; } .cacts { gap: 3px; } .cacts .btn.sm { padding: 4px 2px; font-size: 12.5px; } .cacts .btn.ca-del { padding: 2px 3px; font-size: 12px; } }
   .cset { display: grid; gap: 10px; padding: 12px; margin-top: 10px; background: var(--paper); border-radius: 12px; }
   .cset .days { display: flex; flex-wrap: wrap; gap: 6px; }
   .cset .days label { display: inline-flex; gap: 5px; align-items: center; background: #fff; border-radius: 999px; padding: 5px 10px; font-size: 14px; }
   .cset input[type=time], .cset input[type=number] { font: inherit; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; max-width: 160px; }
-  .cday { display: flex; justify-content: space-between; align-items: center; gap: 10px; padding: 10px 6px 2px; border-top: 1px solid var(--line); font-size: 13.5px; font-weight: 700; color: var(--muted); }
-  .cline { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 4px; }
-  .cday + .cline .crow { border-top: 0; }
-  .ownb { font-size: 12px; font-weight: 700; border-radius: 999px; padding: 2px 8px; background: #E2F4EC; color: #17845D; }
+  .ownb { white-space: nowrap; font-size: 12px; font-weight: 700; border-radius: 999px; padding: 2px 8px; background: #E2F4EC; color: #17845D; }
   .cset input[type=date], .cset select, .cset textarea { font: inherit; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; max-width: 100%; box-sizing: border-box; }
   .cset input[type=date], .cset select { max-width: 220px; }
   #contAdd label { display: grid; gap: 4px; } #contAdd .row { display: flex; gap: 8px; flex-wrap: wrap; }
@@ -564,9 +594,8 @@
   <section class="hud content" aria-labelledby="contH">
     <div class="hh"><h2 id="contH">Content schedule</h2><small><button type="button" class="copy" id="contWorks">What’s working</button><button type="button" class="copy" id="contSet">Settings</button></small></div>
     <div class="hb">
-      <p class="note" id="contStatus"></p>
-      <div class="ctable" role="table" aria-label="Upcoming Instagram posts" id="contList"></div>
-      <div class="cset" id="contAdd" hidden>
+      <div class="cbar"><p class="note" id="contStatus"></p><button type="button" class="btn sm" id="contAddBtn">Add my own idea</button></div>
+      <div class="cset cadd" id="contAdd" hidden>
         <div class="f">Add my own idea</div>
         <label class="f">Date (Monday to Friday)<input type="date" id="contAddDate"></label>
         <label class="f">Format<select id="contAddFmt"><option value="photo">Photo</option><option value="carousel" selected>Carousel</option><option value="reel">Reel</option><option value="story">Story</option></select></label>
@@ -575,6 +604,7 @@
         <p class="note">Eltra drafts it around your idea, then it waits for your OK here like any other post.</p>
         <div class="row"><button type="button" class="btn" id="contAddSave">Save</button> <button type="button" class="btn no" id="contAddCancel">Cancel</button></div>
       </div>
+      <div class="ctable" aria-label="Upcoming Instagram posts" id="contList"></div>
       <div class="cset" id="contSettings" hidden>
         <div class="f">Post on</div>
         <div class="days" id="contDays"></div>
