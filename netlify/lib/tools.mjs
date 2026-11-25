@@ -6,6 +6,7 @@ import { loadPrefs, portalFor } from './prefs.mjs';
 import { loadContent, updateItem, deleteItems } from './content.mjs';
 import { addProposal, decide, loadImprove } from './improve.mjs';
 import { loadJobs, saveJobs, setInstall, parseDay, findJob, normName, syncPreApprovals } from './jobs.mjs';
+import { jobFolderReport } from './jobfolders.mjs';
 import { smsReady, smsProvider, smsSender, sendSms, auMobile, auMobileLocal } from './sms.mjs';
 import { SKILLS, HOOKS, VOICE_TEMPLATE, RUBRIC } from './instagram-data.mjs';
 import { humanize, detect } from './instagram.mjs';
@@ -417,7 +418,7 @@ tool({
 
 tool({
   name: 'drive_search', group: 'google',
-  description: 'Find files or folders in Google Drive by name (and optionally by text inside the file). Customer quote folders live in ELTRA ENERGY > Customer Quotes (folder id 1yRS0IDyBgfe_TVnE1V7wKnT8oapZPKyw), named "YYYY-MM-DD Name – Address".',
+  description: 'Find files or folders in Google Drive by name (and optionally by text inside the file). Customer folders live in ELTRA ENERGY > Customer Quotes (folder id 1yRS0IDyBgfe_TVnE1V7wKnT8oapZPKyw), named "YYYY-MM-DD Name – Address": quotes in its Quoted Jobs subfolder (id 1DJbLBgjEweY_-xpPrLWqEoCCu2yVlX8D; some older ones loose in Customer Quotes), signed jobs in Active Jobs (id 1d0rJPuDDkewSQRbziI1l7-nf1yhrVyx6), finished jobs in Completed Jobs (id 1Yre7ebCvohiyzquQHolFGf6KapcLjeTQ).',
   input_schema: { type: 'object', properties: { name: { type: 'string', description: 'Part of the file or folder name' }, text: { type: 'string', description: 'Text inside the file' }, folders_only: { type: 'boolean' }, in_folder_id: { type: 'string' }, max: { type: 'integer' } } },
   async run({ name, text, folders_only, in_folder_id, max }) {
     const parts = ['trashed = false'];
@@ -1056,15 +1057,40 @@ tool({
 
 
 // ---------- Signed jobs and install dates ----------
-// where the customer's Drive folder is up to (see jobfolders.mjs)
-const folderStatus = (x) => x.folderError ? 'Drive problem: ' + x.folderError + (x.folderId ? (x.folderDone ? ' (folder is in Completed Jobs)' : ' (folder is in Active Jobs)') : '')
-  : x.folderDone ? 'in Completed Jobs' : x.folderId ? 'in Active Jobs' + (x.commTodoId ? ', moves to Completed Jobs when the commissioning to-do is ticked' : '')
-  : 'no folder set up by Eltra (signed before folders were moved automatically)';
+// where the customer's Drive folder is up to (see jobfolders.mjs). `where` is its place in Drive right now, when Drive
+// could be checked; otherwise Eltra's own record is used.
+const folderStatus = (x, where) => {
+  const err = x.folderError ? 'Drive problem: ' + x.folderError + ' ' : '';
+  if (where) return err + 'in ' + where + (where === 'Active Jobs' ? ', moves to Completed Jobs when the DNSP commissioning to-do is ticked' : '');
+  return x.folderError ? 'Drive problem: ' + x.folderError + (x.folderId ? (x.folderDone ? ' (folder is in Completed Jobs)' : ' (folder is in Active Jobs)') : '')
+    : x.folderDone ? 'in Completed Jobs' : x.folderId ? 'in Active Jobs' + (x.commTodoId ? ', moves to Completed Jobs when the commissioning to-do is ticked' : '')
+    : 'no folder yet (none set up by Eltra and none with this customer’s name in Active Jobs)';
+};
 tool({
   name: 'jobs_list', group: 'core',
-  description: 'Signed jobs Eltra is tracking: customer, kit, install date (and where it came from), and which after-sale reminders have gone out (stock a week before, CES on the day, DNSP commissioning 2 weeks after), plus the link to the customer\'s Drive folder and where it is (Active Jobs, or Completed Jobs once the commissioning to-do is ticked).',
+  description: 'Signed jobs Eltra is tracking: customer, kit, install date (and where it came from), and which after-sale reminders have gone out (stock a week before, CES on the day, DNSP commissioning 2 weeks after), plus the link to the customer\'s Drive folder and where it is right now in Customer Quotes › Quoted Jobs / Active Jobs / Completed Jobs (it moves to Completed Jobs once the commissioning to-do is ticked). untracked_active_folders lists folders in Active Jobs that no tracked job uses (e.g. jobs signed before Eltra tracked them).',
   input_schema: { type: 'object', properties: {} },
-  async run() { const d = await loadJobs(); return { jobs: d.list.filter((x) => !x.closed).map((x) => ({ customer: x.name, install_date: x.installDate || 'not set', set_by: x.installSource, kit: x.kit, reminders_sent: x.flags, date_check: x.dateCheck ? { proposed_date: x.dateCheck.date, status: x.dateCheck.status } : undefined, folder: x.folderUrl || undefined, folder_status: folderStatus(x) })) }; }
+  async run() {
+    const d = await loadJobs();
+    // check Drive for where each folder is now, and link jobs to folders already in Active Jobs; a Drive problem never stops the list
+    let rep = null, drive_note;
+    try {
+      rep = await jobFolderReport(d);
+      if (Object.keys(rep.updates).length) {
+        const fresh = await loadJobs();   // reload so a change made meanwhile (e.g. by the automations) isn't lost
+        for (const j of fresh.list) {
+          const u = rep.updates[j.id];
+          if (u && !(u.folderId && j.folderId && j.folderId !== u.folderId)) Object.assign(j, u);
+        }
+        await saveJobs(fresh);
+      }
+    } catch (e) { drive_note = 'Couldn’t check Google Drive just now (' + String(e.message || e).slice(0, 150) + '), so folder_status is Eltra’s last record.'; }
+    return {
+      jobs: d.list.filter((x) => !x.closed).map((x) => ({ customer: x.name, install_date: x.installDate || 'not set', set_by: x.installSource, kit: x.kit, reminders_sent: x.flags, date_check: x.dateCheck ? { proposed_date: x.dateCheck.date, status: x.dateCheck.status } : undefined, folder: x.folderUrl || undefined, folder_status: folderStatus(x, rep && rep.location[x.id]) })),
+      untracked_active_folders: rep && rep.untracked.length ? rep.untracked : undefined,
+      drive_note,
+    };
+  }
 });
 tool({
   name: 'job_install_date', group: 'core',
