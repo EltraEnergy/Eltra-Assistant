@@ -9,6 +9,26 @@
   function load(k, d) { try { var v = JSON.parse(localStorage.getItem(k)); return v === null ? d : v; } catch (e) { return d; } }
   function save(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) {} }
 
+  // ================= collapsible sections =================
+  // which panels and to-do section headers are folded away, remembered on this device: { 'panel:calH': true, 'todo:DNSP': true, … }
+  var SHUT = load('eltra-collapsed', {}) || {};
+  function isShut(k) { return !!SHUT[k]; }
+  function setShut(k, v) { if (v) SHUT[k] = true; else delete SHUT[k]; save('eltra-collapsed', SHUT); }
+  // every dashboard panel with a heading gets a click-to-collapse arrow and a count (the improvement ideas panel already has its own)
+  document.querySelectorAll('section.hud > .hh > h2').forEach(function (h) {
+    var sec = h.parentNode.parentNode, key = 'panel:' + h.id;
+    if (sec.id === 'impPanel') return;
+    var b = document.createElement('button'); b.type = 'button'; b.className = 'imptog ptog';
+    b.innerHTML = '<span class="car" aria-hidden="true">▸</span><span class="impt"></span> <span class="impn" data-pcount></span>';
+    b.querySelector('.impt').textContent = h.textContent;
+    h.textContent = ''; h.appendChild(b);
+    var show = function () { var s = isShut(key); sec.classList.toggle('shut', s); b.setAttribute('aria-expanded', s ? 'false' : 'true'); b.title = s ? 'Show' : 'Hide'; };
+    b.onclick = function () { setShut(key, !isShut(key)); show(); };
+    show();
+  });
+  // the item count on a panel's header (stays visible when it's collapsed)
+  function panelCount(hid, n) { var c = $(hid) && $(hid).querySelector('[data-pcount]'); if (c) c.textContent = n == null ? '' : n; }
+
   function api(path, opts) {
     opts = opts || {};
     var headers = { 'X-Eltra': '1' };
@@ -112,6 +132,7 @@
       return h + '</div>';
     });
     if (D.calendar) $('calStamp').textContent = D.calendar.error ? 'Sync failed' : stamp;
+    panelCount('calH', g.connected && D.calendar && !D.calendar.error ? events.length : null);
     renderNext();
 
     // email
@@ -125,6 +146,7 @@
       }).join('') + '</ul>';
     });
     if (D.mail) $('mailStamp').textContent = D.mail.error ? 'Sync failed' : stamp;
+    panelCount('mailH', g.connected && D.mail && !D.mail.error ? mail.length : null);
 
     // stats
     if (D.calendar && !D.calendar.error) {
@@ -141,6 +163,8 @@
     else section(D.leads, 'leads', 'No open leads.', function (list) {
       return '<ul class="list">' + list.map(function (o) { return '<li><button type="button" class="row" data-say="What’s the latest with the lead ' + esc(o.name || '') + ' (opportunity ' + esc(o.id) + ')? What should I do next?"><div class="r1"><span class="who">' + esc(o.stage || '') + '</span><span class="dt">' + esc(String(o.updated || '')) + '</span></div><div class="s">' + esc(o.name || (o.contact && o.contact.name) || 'Lead') + '</div>' + (o.contact && o.contact.phone ? '<div class="sn">' + esc(o.contact.phone) + '</div>' : '') + '</button></li>'; }).join('') + '</ul>';
     });
+    panelCount('leadH', s.ghl && D.leads && !D.leads.error ? D.leads.data.length : null);
+    panelCount('jobH', s.sm8 && D.jobs && !D.jobs.error ? D.jobs.data.length : null);
     if (!s.sm8) $('jobs').innerHTML = '<p class="note">Not connected yet. Add SERVICEM8_API_KEY in Netlify to connect ServiceM8.</p>';
     else section(D.jobs, 'jobs', 'Nothing booked in the next 7 days.', function (list) {
       return '<ul class="list">' + list.map(function (j) { var job = j.job || {}, m = String(j.start || '').match(/^(\d{4})-(\d{2})-(\d{2}) (\d{2}):(\d{2})/), when = m ? new Date(+m[1], +m[2] - 1, +m[3], +m[4], +m[5]) : null;
@@ -1123,6 +1147,7 @@
   function renderContent() {
     var list = $('contList'); list.textContent = '';
     var items = (CS.items || []).filter(function (x) { return x.status !== 'skipped' || Date.parse(x.at) > Date.now(); });
+    panelCount('contH', items.length);
     if (!items.length) { var e = document.createElement('p'); e.className = 'note'; e.textContent = 'Eltra is planning the week. Drafts appear here within about half an hour, and each one waits for your OK.'; list.appendChild(e); }
     items.forEach(function (it) {
       var w = whenText(it), b = document.createElement('button'); b.type = 'button'; b.className = 'crow'; b.setAttribute('role', 'row');
@@ -1475,13 +1500,50 @@
     var open = inTab.filter(function (x) { return !x.done; }).sort(function (a, b) { return urank(a) - urank(b) || ((a.due || '9999') < (b.due || '9999') ? -1 : (a.due || '9999') > (b.due || '9999') ? 1 : a.createdAt < b.createdAt ? -1 : 1); });
     var done = inTab.filter(function (x) { return x.done; }).sort(function (a, b) { return (b.doneAt || '') < (a.doneAt || '') ? -1 : 1; });
     var list = $('todoList'); list.textContent = '';
+    panelCount('todoH', count('All'));
     if (!open.length) { var e = document.createElement('li'); e.className = 'empty'; e.textContent = todoTab === 'All' ? 'Nothing to do. Add one above, or ask Eltra to.' : 'Nothing in ' + tabLabel(todoTab) + '.'; list.appendChild(e); }
-    open.concat(showDone ? done : []).forEach(function (it) {
+    var shown = open.concat(showDone ? done : []);
+    // "All" and a parent tab (e.g. DNSP) list the to-dos under collapsible section and sub-section headers; a single section is a plain list
+    var grouped = todoTab === 'All' || todoTab.charAt(0) === '*';
+    $('todoColl').hidden = !grouped || !shown.length;
+    var groupBox = function (key, label, its, into) {
+      var li = document.createElement('li'), k = 'todo:' + key, n = its.filter(function (x) { return !x.done; }).length;
+      li.className = 'tgrp';
+      li.innerHTML = '<button type="button" class="tgh" data-shut="' + esc(k) + '"><span class="car" aria-hidden="true">▸</span><span>' + esc(label) + '</span>' + (n ? '<span class="n">' + n + '</span>' : '') + '</button><ul class="tlist"></ul>';
+      var b = li.firstChild, show = function () { var s = isShut(k); li.classList.toggle('shut', s); b.setAttribute('aria-expanded', s ? 'false' : 'true'); };
+      b.onclick = function () { setShut(k, !isShut(k)); show(); };
+      show(); into.appendChild(li); return li.lastChild;
+    };
+    var inSecs = function (secs) { return shown.filter(function (x) { return secs.indexOf(x.section) >= 0; }); };
+    var subBoxes = function (g, into) {
+      g.secs.forEach(function (sname) {
+        var its = inSecs([sname]), p = secParts(sname);
+        if (its.length) its.forEach(todoItem.bind(null, groupBox(sname, p ? p.sub : 'General', its, into)));
+      });
+    };
+    if (!grouped) shown.forEach(todoItem.bind(null, list));
+    else {
+      var known = [];
+      groups.forEach(function (g) {
+        if (todoTab === 'All') {
+          var its = inSecs(g.secs); known = known.concat(g.secs);
+          if (!its.length) return;
+          var box = groupBox(g.subs ? '*' + g.name : g.name, g.name, its, list);
+          if (g.subs) subBoxes(g, box); else its.forEach(todoItem.bind(null, box));
+        } else if (g.subs && '*' + g.name === todoTab) { known = g.secs; subBoxes(g, list); }
+      });
+      // to-dos whose section has since been renamed or removed still show, under "Other"
+      var rest = shown.filter(function (x) { return known.indexOf(x.section) < 0; });
+      if (rest.length) rest.forEach(todoItem.bind(null, groupBox('~other', 'Other', rest, list)));
+    }
+    var sd = $('todoShowDone'); sd.hidden = !done.length; sd.textContent = showDone ? 'Hide finished' : 'Show finished (' + done.length + ')';
+  }
+  function todoItem(list, it) {
       var li = document.createElement('li'), urg = it.done ? '' : todoUrgency(it); li.className = (it.done ? 'done' : '') + (urg ? ' u-' + urg : '');
       if (urg) li.title = URG[urg].label + (it.urgency ? '' : ' (from the due date)');
       var due = todoDueText(it.due);
       li.innerHTML = '<input type="checkbox"' + (it.done ? ' checked' : '') + ' aria-label="Done: ' + esc(it.text) + '">' +
-        '<span class="tt" role="button" tabindex="0" title="' + (it.note ? 'Edit or clear the note' : 'Add a note') + '" aria-label="' + (urg ? URG[urg].label + ': ' : '') + esc(it.text) + (it.note ? '. Note: ' + esc(it.note) + '. Edit note' : '. Add a note') + '">' + esc(it.text) + '<small>' + [todoTab === 'All' ? it.section : todoTab.charAt(0) === '*' ? (secParts(it.section) || { sub: '' }).sub : '', it.ref, (it.owner && it.owner !== me.user) ? 'for ' + OWNER[it.owner] : ''].filter(Boolean).map(esc).join(' · ') + '</small>' +
+        '<span class="tt" role="button" tabindex="0" title="' + (it.note ? 'Edit or clear the note' : 'Add a note') + '" aria-label="' + (urg ? URG[urg].label + ': ' : '') + esc(it.text) + (it.note ? '. Note: ' + esc(it.note) + '. Edit note' : '. Add a note') + '">' + esc(it.text) + '<small>' + [todos.sections.indexOf(it.section) < 0 ? it.section : '', it.ref, (it.owner && it.owner !== me.user) ? 'for ' + OWNER[it.owner] : ''].filter(Boolean).map(esc).join(' · ') + '</small>' +
         (it.note ? '<small class="tnote"><span aria-hidden="true">📝</span> ' + esc(it.note) + '</small>' : '') + '</span>' +
         '<span class="due ' + (due && !it.done ? due.cls : '') + '">' + (it.meta && it.meta.kind === 'followup' && !it.done ? '<button type="button" class="tdraft" data-draft>Write email</button> ' : '') + (due ? esc(due.txt) : '') + '</span>' +
         '<button type="button" class="x" aria-label="Delete: ' + esc(it.text) + '">×</button>';
@@ -1512,8 +1574,6 @@
         ask('Write follow-up email ' + m.stage + ' of ' + m.of + ' for ' + m.customer + (m.email ? ' (' + m.email + ')' : '') + ' about their proposal (Pylon project ' + m.projectId + ', sent about ' + m.sentDays + ' days ago). This one should be ' + m.brief + '. Look up the proposal for the system and price, keep it short and friendly, and send it with gmail_send so I can check it and approve it once (don\'t make a Gmail draft).' + (m.email ? '' : ' There is no email address in Pylon for them, so ask me for it.'));
       };
       list.appendChild(li);
-    });
-    var sd = $('todoShowDone'); sd.hidden = !done.length; sd.textContent = showDone ? 'Hide finished' : 'Show finished (' + done.length + ')';
   }
   function todoCall(body) {
     $('todoErr').hidden = true;
@@ -1524,6 +1584,10 @@
     e.preventDefault(); var t = $('todoText').value.trim(); if (!t) return;
     todoCall({ action: 'add', text: t, section: $('todoSec').value, due: $('todoDue').value, owner: $('todoFor').value }).then(function () { $('todoText').value = ''; $('todoDue').value = ''; $('todoText').focus(); });
   };
+  // Collapse all / Expand all: every to-do section and sub-section header showing now
+  function todoShutAll(v) { $('todoList').querySelectorAll('[data-shut]').forEach(function (b) { setShut(b.dataset.shut, v); }); renderTodos(); }
+  $('todoCollAll').onclick = function () { todoShutAll(true); };
+  $('todoExpAll').onclick = function () { todoShutAll(false); };
   $('todoShowDone').onclick = function () { showDone = !showDone; renderTodos(); };
   $('todoWho').querySelectorAll('button').forEach(function (b) { b.onclick = function () { todoWho = b.dataset.who; renderTodos(); }; });
   $('todoEditSec').onclick = function () {
