@@ -31,9 +31,11 @@ const removedDates = (d) => new Set((d.removed || []).map((x) => x.date));
 const sameTopic = (a, b) => String(a || '').trim().toLowerCase() === String(b || '').trim().toLowerCase();
 const note = (d, msg) => { d.log = [{ at: new Date().toISOString(), msg }].concat(d.log || []).slice(0, 30); };
 
+// a post holds its date unless it was skipped; a post someone added by hand always holds it, so the fill never takes that day
+const holdsDate = (x) => x.status !== 'skipped' || x.own;
 // the posting slots for the next `aheadDays` days that have nothing in them yet
 function openSlots(d) {
-  const out = [], taken = new Set(d.items.filter((x) => x.status !== 'skipped').map((x) => x.date).concat([...removedDates(d)]));
+  const out = [], taken = new Set(d.items.filter(holdsDate).map((x) => x.date).concat([...removedDates(d)]));
   for (let i = 1; i <= d.settings.aheadDays; i++) {
     const date = melbToday(i), dow = new Date(date + 'T12:00:00Z').getUTCDay();
     if (d.settings.days.includes(dow) && !taken.has(date)) out.push(date);
@@ -79,7 +81,7 @@ export async function planSlots(d) {
   });
   let n = 0;
   for (const p of ans.posts || []) {
-    if (!slots.includes(p.date) || d.items.some((x) => x.date === p.date && x.status !== 'skipped')) continue;
+    if (!slots.includes(p.date) || d.items.some((x) => x.date === p.date && holdsDate(x))) continue;
     if ((d.removed || []).some((x) => x.date === p.date || sameTopic(x.topic, p.topic))) continue;
     d.items.push({ id: uid(), date: p.date, at: slotTime(p.date, d.settings.time), format: FORMATS.includes(p.format) ? p.format : 'carousel', topic: String(p.topic).slice(0, 120), angle: String(p.angle).slice(0, 400), status: 'planned', createdAt: new Date().toISOString() }); n++;
   }
@@ -87,6 +89,7 @@ export async function planSlots(d) {
   return n;
 }
 
+const ownNote = (it) => (it.own ? '\n(This is ' + (it.addedBy === 'ethan' ? 'Ethan' : 'Will') + '\'s own idea, added by hand: build the post around it and keep to what they asked.)' : '');
 // 2. draft the next planned post (one per run, so each run stays short)
 export async function draftOne(d, id) {
   const it = id ? d.items.find((x) => x.id === id) : d.items.filter((x) => x.status === 'planned').sort((a, b) => a.date.localeCompare(b.date))[0];
@@ -94,21 +97,21 @@ export async function draftOne(d, id) {
   const ctx = await context(d), sys = SYSTEM(ctx);
   if (it.format === 'carousel') {
     const a = await claudeJSON({ system: sys + '\n\nCarousel guide:\n' + SKILLS['ig-carousel'].body.slice(0, 3500) + '\n\nCaption guide:\n' + SKILLS['ig-caption'].body.slice(0, 3000),
-      prompt: 'Write the carousel for ' + it.date + '. Topic: ' + it.topic + '. Angle: ' + it.angle + (it.feedback ? '\nChanges asked for: ' + it.feedback : '') + '\nRecent jobs:\n' + (ctx.jobs.join('\n') || 'none') + '\n4-7 slides: a cover that earns the swipe, short slides (heading plus one or two lines), a final slide with the one ask. Then the caption (first line works before "… more", one ask, up to 5 specific hashtags at the end).',
+      prompt: 'Write the carousel for ' + it.date + '. Topic: ' + it.topic + '. Angle: ' + it.angle + ownNote(it) + (it.feedback ? '\nChanges asked for: ' + it.feedback : '') + '\nRecent jobs:\n' + (ctx.jobs.join('\n') || 'none') + '\n4-7 slides: a cover that earns the swipe, short slides (heading plus one or two lines), a final slide with the one ask. Then the caption (first line works before "… more", one ask, up to 5 specific hashtags at the end).',
       schema: { type: 'object', properties: { slides: { type: 'array', items: { type: 'object', properties: { heading: { type: 'string' }, body: { type: 'string' } }, required: ['heading'] } }, caption: { type: 'string' } }, required: ['slides', 'caption'] }, maxTokens: 2200 });
     const h = humanize(a.caption);
     it.slides = (a.slides || []).slice(0, 10).map((s) => ({ heading: humanize(s.heading).text, body: s.body ? humanize(s.body).text : '' }));
     it.caption = h.text; it.check = { verdict: detect(h.text).verdict, caption: captionLint(h.text).verdict, flags: h.flags.slice(0, 4) };
   } else if (it.format === 'photo') {
     const a = await claudeJSON({ system: sys + '\n\nCaption guide:\n' + SKILLS['ig-caption'].body.slice(0, 3500),
-      prompt: 'Write a single-photo Instagram post for ' + it.date + '. Topic: ' + it.topic + '. Angle: ' + it.angle + (it.feedback ? '\nChanges asked for: ' + it.feedback : '') + '\nRecent jobs:\n' + (ctx.jobs.join('\n') || 'none') + '\nThis is one photo, not a carousel: no slides and no text on the image. Say what photo to use (one or two lines, e.g. a real install shot), then the caption (first line works before "… more", one ask, up to 5 specific hashtags at the end).',
+      prompt: 'Write a single-photo Instagram post for ' + it.date + '. Topic: ' + it.topic + '. Angle: ' + it.angle + ownNote(it) + (it.feedback ? '\nChanges asked for: ' + it.feedback : '') + '\nRecent jobs:\n' + (ctx.jobs.join('\n') || 'none') + '\nThis is one photo, not a carousel: no slides and no text on the image. Say what photo to use (one or two lines, e.g. a real install shot), then the caption (first line works before "… more", one ask, up to 5 specific hashtags at the end).',
       schema: { type: 'object', properties: { photo: { type: 'string', description: 'what photo to use' }, caption: { type: 'string' } }, required: ['photo', 'caption'] }, maxTokens: 1500 });
     const h = humanize(a.caption);
     it.photo = String(a.photo || '').slice(0, 400);
     it.caption = h.text; it.check = { verdict: detect(h.text).verdict, caption: captionLint(h.text).verdict, flags: h.flags.slice(0, 4) };
   } else if (it.format === 'reel') {
     const a = await claudeJSON({ system: sys + '\n\nReel guide:\n' + SKILLS['ig-reel'].body.slice(0, 4000),
-      prompt: 'Write the Reel for ' + it.date + '. Topic: ' + it.topic + '. Angle: ' + it.angle + (it.feedback ? '\nChanges asked for: ' + it.feedback : '') + '\nGive 3 hook options (said in the first 3 seconds), the script one line per beat (20-40 seconds), what to film for each beat, and the caption.',
+      prompt: 'Write the Reel for ' + it.date + '. Topic: ' + it.topic + '. Angle: ' + it.angle + ownNote(it) + (it.feedback ? '\nChanges asked for: ' + it.feedback : '') + '\nGive 3 hook options (said in the first 3 seconds), the script one line per beat (20-40 seconds), what to film for each beat, and the caption.',
       schema: { type: 'object', properties: { hooks: { type: 'array', items: { type: 'string' } }, script: { type: 'string', description: 'one line per beat' }, shots: { type: 'string' }, caption: { type: 'string' } }, required: ['hooks', 'script', 'caption'] }, maxTokens: 2000 });
     const ranked = rankHooks(a.hooks || []), best = ranked.ranked[0];
     const script = (best ? best.hook + '\n' : '') + humanize(a.script).text, beats = beatSheet(script, 165, 30);
@@ -116,7 +119,7 @@ export async function draftOne(d, id) {
     it.caption = humanize(a.caption).text; it.check = { hook: best ? best.score + ' ' + best.verdict : '', caption: captionLint(it.caption).verdict };
   } else {
     const a = await claudeJSON({ system: sys + '\n\nStory guide:\n' + SKILLS['ig-story'].body.slice(0, 3500),
-      prompt: 'Plan the story sequence for ' + it.date + '. Topic: ' + it.topic + '. Angle: ' + it.angle + '. 3-6 frames: what to show, the words on each, and which sticker (poll, question, quiz, link) where.',
+      prompt: 'Plan the story sequence for ' + it.date + '. Topic: ' + it.topic + '. Angle: ' + it.angle + ownNote(it) + '. 3-6 frames: what to show, the words on each, and which sticker (poll, question, quiz, link) where.',
       schema: { type: 'object', properties: { frames: { type: 'array', items: { type: 'string' } } }, required: ['frames'] }, maxTokens: 1500 });
     it.frames = (a.frames || []).map((f) => humanize(f).text); it.caption = '';
   }
@@ -214,6 +217,22 @@ export async function updateItem(id, patch, by = currentUser()) {
   if (patch.action === 'skip') it.status = 'skipped';
   if (patch.action === 'redraft') { it.status = 'planned'; it.feedback = patch.feedback || ''; }
   if (patch.action === 'retry') it.status = 'scheduled';
+  await saveContent(d); return it;
+}
+// Ethan's (or Will's) own idea, added by hand on the dashboard for a weekday. It's drafted like any other post and
+// waits for approval; the automatic fill never plans over that day.
+export async function addOwnIdea({ date, format, idea } = {}, by = currentUser()) {
+  date = String(date || '').trim(); idea = String(idea || '').trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) throw new Error('Pick a date');
+  const dow = new Date(date + 'T12:00:00Z').getUTCDay();
+  if (!(dow >= 1 && dow <= 5)) throw new Error('Pick a weekday (Monday to Friday)');
+  if (date < melbToday(0)) throw new Error('That date has already passed');
+  if (!FORMATS.includes(format)) throw new Error('Format must be one of: ' + FORMATS.join(', '));
+  if (!idea) throw new Error('Write the topic or idea');
+  const d = await loadContent(), first = idea.split('\n')[0].trim();
+  const it = { id: uid(), date, at: slotTime(date, d.settings.time), format, topic: (first.length > 120 ? first.slice(0, 117) + '…' : first), angle: idea.slice(0, 1000), status: 'planned', own: true, addedBy: by, createdAt: new Date().toISOString() };
+  d.items.push(it);
+  note(d, 'Added ' + (by === 'ethan' ? 'Ethan' : 'Will') + '’s own idea for ' + date + ': ' + it.topic);
   await saveContent(d); return it;
 }
 // Delete posts from the schedule for good: one by id, or every skipped one (skipped: true). Nothing is posted or

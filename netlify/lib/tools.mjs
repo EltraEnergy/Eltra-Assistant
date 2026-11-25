@@ -1032,11 +1032,11 @@ tool({
 // ---------- Content schedule (the weekly Instagram autopilot) ----------
 tool({
   name: 'content_schedule', group: 'core',
-  description: 'The Instagram content schedule Eltra keeps filled for the coming week: each slot\'s date, format (photo, carousel, reel, story), topic, status (planned → draft → scheduled/manual → posted; or skipped/failed) and id. Deleted posts are not listed. Drafts need Will or Ethan to approve them in the Content schedule panel on the dashboard before anything is posted.',
+  description: 'The Instagram content schedule Eltra keeps filled for the coming week: each slot\'s date, format (photo, carousel, reel, story), topic, status (planned → draft → scheduled/manual → posted; or skipped/failed) and id. own_idea means Will or Ethan added that post by hand on the dashboard: keep to their idea. Deleted posts are not listed. Drafts need Will or Ethan to approve them in the Content schedule panel on the dashboard before anything is posted.',
   input_schema: { type: 'object', properties: {} },
   async run() {
     const d = await loadContent(), cut = Date.now() - 7 * 864e5;
-    return { settings: d.settings, what_works: d.learnings && d.learnings.text, items: d.items.filter((x) => Date.parse(x.at || x.createdAt) > cut).map((x) => ({ id: x.id, date: x.date, format: x.format, topic: x.topic, status: x.status, caption: x.caption ? (x.format === 'photo' ? x.caption : x.caption.slice(0, 300)) : undefined, photo: x.photo, link: x.link, error: x.error })) };
+    return { settings: d.settings, what_works: d.learnings && d.learnings.text, items: d.items.filter((x) => Date.parse(x.at || x.createdAt) > cut).map((x) => ({ id: x.id, date: x.date, format: x.format, topic: x.topic, status: x.status, own_idea: x.own ? true : undefined, caption: x.caption ? (x.format === 'photo' ? x.caption : x.caption.slice(0, 300)) : undefined, photo: x.photo, link: x.link, error: x.error })) };
   }
 });
 tool({
