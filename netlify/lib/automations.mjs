@@ -1,10 +1,10 @@
 // Automatic to-dos, so nothing slips:
 //  • a Pylon proposal gets signed  → install booking and DNSP pre-approval to-dos (plus the welcome email to-do when WELCOME_EMAIL_TODO is on).
 //    The pre-approval has no due date until the install date is known, then it's due 7 days before and moves with it
-//  • a proposal has sat unsigned for 3+ days → a follow-up to-do (once per project)
+//  • a proposal has sat unsigned for 3+ days → follow-up to-dos (Quoting - Follow ups)
 //  • a proposal or signed design includes Solar Victoria (battery rebate or interest-free loan) → a "Lodge Solar Victoria application" to-do (once per project)
 //  • an "Install - name" event appears in the calendar for a signed job → install date, DNSP pre-approval and stock to-dos, and a note to Will
-//  • a site appointment in Will's calendar has finished → a "Send Pylon proposal to …" Quoting to-do (ticked off once it's sent)
+//  • a site appointment in Will's calendar has finished → a "Send Pylon proposal to …" to-do (Quoting - Send proposal) (ticked off once it's sent)
 //    (website booking-form events too: "Will & <name> in home …"), and each morning any finished sales visit with no
 //    proposal to-do or Pylon project is flagged in Will's brief
 //  • an install date check (customer asked by email/text if a date suits) → reads their reply: confirmed records the date,
@@ -17,7 +17,7 @@
 //  • every Monday morning → "Do payroll", every Saturday morning → "Do ServiceM8" (Ethan, Accounts, due that day)
 // Runs on a schedule (functions/automations.mjs) and whenever the dashboard loads the to-do list (at most every 15 min).
 import { store, runAs, melbToday } from './util.mjs';
-import { addTodo, loadTodos, updateTodo } from './todos.mjs';
+import { addTodo, loadTodos, updateTodo, QUOTE_SEND, QUOTE_FOLLOW } from './todos.mjs';
 import { pylon, pylonReady, pylonProject, pylonDesign, DESIGN_FIELDS, toolByName, invitee } from './tools.mjs';
 import { googleStatus, g, CAL, GMAIL } from './google.mjs';
 import { claudeJSON } from './claude.mjs';
@@ -90,7 +90,7 @@ async function followUpStep(s, p, name, google, today, budget) {   // google/bud
   if (s.followDay.count >= FOLLOW_PER_DAY) return false;            // today's quota used: next run tomorrow
   const st = STAGE[f.stage];
   // no email is written here: the Draft email button on this to-do asks Eltra to draft it in front of Will, for approval
-  const t = await addTodo({ owner: 'will', section: 'Quoting', text: st.text(name), due: today, ref: name + ' · auto', meta: { kind: 'followup', stage: f.stage + 1, of: STAGE.length, customer: name, email: (p.customer && p.customer.email) || '', projectId: p.id, brief: st.brief, sentDays: Math.round(sentDays) } });
+  const t = await addTodo({ owner: 'will', section: QUOTE_FOLLOW, text: st.text(name), due: today, ref: name + ' · auto', meta: { kind: 'followup', stage: f.stage + 1, of: STAGE.length, customer: name, email: (p.customer && p.customer.email) || '', projectId: p.id, brief: st.brief, sentDays: Math.round(sentDays) } });
   s.follow[p.id] = { stage: f.stage + 1, lastAt: new Date().toISOString(), todoId: t.id };
   s.followDay.count++;
   return true;
@@ -286,7 +286,7 @@ async function siteAppointmentTodos(s, ctx, first) {
     const meta = { kind: 'siteproposal', customer: appt.name, address: appt.address, email: appt.email, phone: appt.phone || '', day, eventId: e.id };
     const sent = await siteProposalSent(s, ctx, meta);
     if (sent) { s.site.seen[e.id] = 'skipped: ' + sent; continue; }
-    const t = await addTodo({ owner: 'will', section: 'Quoting', text: 'Send Pylon proposal to ' + appt.name + (appt.address ? ' (' + appt.address + ')' : ''), due: day, ref: appt.name + ' · auto', meta });
+    const t = await addTodo({ owner: 'will', section: QUOTE_SEND, text: 'Send Pylon proposal to ' + appt.name + (appt.address ? ' (' + appt.address + ')' : ''), due: day, ref: appt.name + ' · auto', meta });
     todos.items.push(t); out.push(t);
     s.site.seen[e.id] = t.id;
   }

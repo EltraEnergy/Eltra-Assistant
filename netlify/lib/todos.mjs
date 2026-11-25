@@ -8,6 +8,9 @@ const ETHAN_SECTIONS = ['Install dates', 'Accounts', 'Socials'];
 // DNSP is split into these sub-sections (Will asked for this), always shown together in this order
 const DNSP_SUBS = ['DNSP - Pre approval', 'DNSP - Grid connection', 'DNSP - Solar Vic', 'DNSP - Retailer request'];
 const DNSP_ORDER = ['DNSP - Pre approval', 'DNSP - Grid connection', 'DNSP - CES', 'DNSP - Solar Vic', 'DNSP - Retailer request'];
+// Quoting is split the same way (Will asked for this): quotes still to work out, proposals to send, follow-ups on unsigned proposals
+export const QUOTE_TO_DO = 'Quoting - To quote', QUOTE_SEND = 'Quoting - Send proposal', QUOTE_FOLLOW = 'Quoting - Follow ups';
+const QUOTING_ORDER = [QUOTE_TO_DO, QUOTE_SEND, QUOTE_FOLLOW];
 // Ethan looks after stock, socials, install dates and accounts/invoicing
 const ETHAN_WORK = /(stock|install date|booking|account|invoic|social)/i;
 // who a to-do is for: 'will', 'ethan' or 'both'
@@ -38,12 +41,15 @@ export async function loadTodos() {
   if (!d.teamSections) ETHAN_SECTIONS.forEach((x) => { if (!sections.some((y) => y.toLowerCase() === x.toLowerCase())) sections.splice(Math.max(0, sections.length - 1), 0, x); });   // one-off: add Ethan's sections
   // one-off: split "DNSP" into its sub-sections and move the existing DNSP to-dos into the right one
   if (!d.dnspSplit) splitDnsp(sections, d.items || []);
+  // one-off: split "Quoting" into its sub-sections, and fold the old "Follow ups" section into "Quoting - Follow ups"
+  if (!d.quotingSplit) splitQuoting(sections, d.items || []);
   sections = orderDnsp(sections, d.items || []);
+  sections = orderQuoting(sections, d.items || []);
   // to-dos from before Ethan joined have no owner: give his kind of work to him, the rest to Will
   const guessOwner = (x) => ETHAN_WORK.test(x.section || '') || /(book the install|install date|order stock|invoice|xero|myob|instagram|facebook)/i.test(x.text || '') ? 'ethan' : 'will';
   // (older to-dos have no 'by' field; ones you've deliberately reassigned are marked ownerSet)
   const items = (Array.isArray(d.items) ? d.items : []).map((x) => (x.by || x.ownerSet ? x : { ...x, owner: guessOwner(x) }));
-  return { sections, items, teamSections: true, dnspSplit: true };
+  return { sections, items, teamSections: true, dnspSplit: true, quotingSplit: true };
 }
 // which DNSP sub-section an old "DNSP" to-do belongs in (by what it says, then by the customers Will listed)
 function dnspSubFor(x) {
@@ -63,21 +69,49 @@ function splitDnsp(sections, items) {
   // keep plain "DNSP" only while something is still in it
   if (!items.some((x) => /^dnsp$/i.test(x.section || ''))) sections.splice(sections.findIndex((s) => /^dnsp$/i.test(s)), 1);
 }
-// Will asked for this: the DNSP sub-sections always sit together in DNSP_ORDER, even when empty.
-// Any other "DNSP - …" sub-sections follow them; every other section keeps its place.
-function orderDnsp(sections, items) {
-  const k = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, '');
-  const isDnsp = (s) => /^dnsp\s*([-–—:].*)?$/i.test(s);
-  // a stored name that's the same as a fixed one bar case/spacing ("DNSP - Ces") becomes the fixed one, with its to-dos
-  const fixed = (s) => DNSP_ORDER.find((n) => k(n) === k(s));
-  items.forEach((x) => { const f = fixed(x.section); if (f) x.section = f; });
-  const at = sections.findIndex(isDnsp), start = at < 0 ? 0 : at;
-  const plain = sections.filter((s) => /^dnsp$/i.test(s));
-  const extra = sections.filter((s) => isDnsp(s) && !/^dnsp$/i.test(s) && !fixed(s));
-  const others = sections.filter((s) => !isDnsp(s));
-  const before = sections.slice(0, start).filter((s) => !isDnsp(s));
-  return [...before, ...plain, ...DNSP_ORDER, ...extra, ...others.slice(before.length)];
+// which Quoting sub-section a to-do belongs in: auto follow-ups and "follow up / check in" ones, then proposals to send, else to quote
+function quotingSubFor(x) {
+  const t = ((x.text || '') + ' ' + (x.ref || '')).toLowerCase(), kind = x.meta && x.meta.kind;
+  if (kind === 'followup' || /(follow.?up|check.?in)/.test(t)) return QUOTE_FOLLOW;
+  if (kind === 'siteproposal' || /(proposal|send (the |a )?quote)/.test(t)) return QUOTE_SEND;
+  return QUOTE_TO_DO;
 }
+const isOldFollowUps = (s) => /^follow.?ups?$/i.test(String(s || '').trim());
+function splitQuoting(sections, items) {
+  const isQuoting = (s) => /^quoting\s*([-–—:].*)?$/i.test(s);
+  let at = sections.findIndex(isQuoting);
+  if (at < 0) { at = -1; sections.forEach((s, i) => { if (/^dnsp\b/i.test(s)) at = i; }); at++; }   // no Quoting: after DNSP
+  else at++;
+  sections.splice(at, 0, ...QUOTING_ORDER.filter((n) => !sections.some((s) => s.toLowerCase() === n.toLowerCase())));
+  items.forEach((x) => {
+    if (/^quoting$/i.test(x.section || '')) x.section = quotingSubFor(x);
+    else if (isOldFollowUps(x.section)) x.section = QUOTE_FOLLOW;
+  });
+  // plain "Quoting" and the old "Follow ups" go once they're empty (they are, after the moves above)
+  for (let i = sections.length - 1; i >= 0; i--) {
+    const s = sections[i];
+    if ((/^quoting$/i.test(s) || isOldFollowUps(s)) && !items.some((x) => x.section === s)) sections.splice(i, 1);
+  }
+}
+// Will asked for this: the DNSP sub-sections always sit together in DNSP_ORDER, even when empty, and the Quoting
+// ones in QUOTING_ORDER. Any other "DNSP - …" / "Quoting - …" sub-sections follow them; every other section keeps its place.
+function orderGroup(sections, items, parent, order, fallback) {
+  const k = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, '');
+  const inGroup = (s) => new RegExp('^' + parent + '\\s*([-–—:].*)?$', 'i').test(s);
+  const isPlain = (s) => k(s) === parent;
+  // a stored name that's the same as a fixed one bar case/spacing ("DNSP - Ces") becomes the fixed one, with its to-dos
+  const fixed = (s) => order.find((n) => k(n) === k(s));
+  items.forEach((x) => { const f = fixed(x.section); if (f) x.section = f; });
+  const at = sections.findIndex(inGroup), start = at < 0 ? fallback(sections.filter((s) => !inGroup(s))) : at;
+  const plain = sections.filter(isPlain);
+  const extra = sections.filter((s) => inGroup(s) && !isPlain(s) && !fixed(s));
+  const others = sections.filter((s) => !inGroup(s));
+  const before = at < 0 ? others.slice(0, start) : sections.slice(0, start).filter((s) => !inGroup(s));
+  return [...before, ...plain, ...order, ...extra, ...others.slice(before.length)];
+}
+const orderDnsp = (sections, items) => orderGroup(sections, items, 'dnsp', DNSP_ORDER, () => 0);
+// no Quoting section at all: put them straight after the DNSP ones
+const orderQuoting = (sections, items) => orderGroup(sections, items, 'quoting', QUOTING_ORDER, (others) => { let n = 0; others.forEach((s, i) => { if (/^dnsp\b/i.test(s)) n = i + 1; }); return n; });
 const save = (d) => store().setJSON(KEY, d);
 // One write at a time: each change loads, edits and saves the list before the next starts,
 // so two changes made together can't overwrite each other.
@@ -94,7 +128,11 @@ function pickSection(d, name, create) {
   if (exact) return exact;
   const sub = n.match(/^(.+?)\s*[-–—:]\s*(.+)$/);
   if (sub) {
-    const pk = keyOf(sub[1]), parent = d.sections.find((s) => keyOf(s) === pk || keyOf(s.split(/\s+-\s+/)[0]) === pk);
+    const pk = keyOf(sub[1]);
+    // "Quoting - Follow up", "Quoting - Proposals" … → the fixed Quoting sub-section it means
+    const qs = pk === 'quoting' && quotingSubOf(d, sub[2].toLowerCase());
+    if (qs) return qs;
+    const parent = d.sections.find((s) => keyOf(s) === pk || keyOf(s.split(/\s+-\s+/)[0]) === pk);
     if (parent) {
       const name2 = parent.split(/\s+-\s+/)[0] + ' - ' + sub[2].trim();
       if (!create) return parent;
@@ -106,7 +144,7 @@ function pickSection(d, name, create) {
   const dnspSub = (/pre.?approv/.test(low) && d.sections.find((s) => /^dnsp\b.*pre.?approv/i.test(s))) || (/(grid|connection)/.test(low) && d.sections.find((s) => /^dnsp\b.*grid/i.test(s)))
     || (/solar ?vic/.test(low) && d.sections.find((s) => /^dnsp\b.*solar ?vic/i.test(s))) || (/retailer/.test(low) && d.sections.find((s) => /^dnsp\b.*retailer/i.test(s)))
     || (/(\bces\b|electrical safety)/.test(low) && d.sections.find((s) => /^dnsp\b.*\bces\b/i.test(s)));
-  const hit = dnspSub || d.sections.find((s) => s.toLowerCase().includes(low) || low.includes(s.toLowerCase()))
+  const hit = dnspSub || quotingSubOf(d, low) || d.sections.find((s) => s.toLowerCase().includes(low) || low.includes(s.toLowerCase()))
     || (/(stock|order|buy|supplier)/.test(low) && d.sections.find((s) => /stock/i.test(s))) || (/(quote|proposal|pylon)/.test(low) && d.sections.find((s) => /quot/i.test(s)))
     || (/(dnsp|pre.?approval|grid|powercor|citipower|jemena|ausnet|united)/.test(low) && d.sections.find((s) => /dnsp/i.test(s)))
     || (/(book|schedul|install date|calendar)/.test(low) && d.sections.find((s) => /install date|book/i.test(s)))
@@ -115,6 +153,15 @@ function pickSection(d, name, create) {
   if (hit) return hit;
   if (create) { d.sections.push(n); return n; }
   return d.sections[0];
+}
+
+// Quoting words go to the matching Quoting sub-section if there is one (the old "Follow ups" section's to-dos land in "Quoting - Follow ups")
+function quotingSubOf(d, low) {
+  const find = (re) => d.sections.find((s) => re.test(s));
+  return (/(follow.?up|check.?in)/.test(low) && find(/^quoting\b.*follow/i))
+    || (/(proposal|pylon)/.test(low) && find(/^quoting\b.*proposal/i))
+    || (/(to quote|quotes?\b|quoting)/.test(low) && find(/^quoting\b.*to quote/i))
+    || '';
 }
 
 function addOne(d, { section, text, due, ref, owner, meta, note, urgency }) {
@@ -186,7 +233,7 @@ export const addTodos = (items) => batch(Array.isArray(items) ? items : [], addO
 export const updateTodos = (updates) => batch(Array.isArray(updates) ? updates : [], (d, u) => updateOne(d, u && u.id, u || {}));
 export const deleteTodo = (id) => serial(async () => { const d = await loadTodos(); d.items = d.items.filter((x) => x.id !== id); await save(d); });
 export const setSections = (list) => serial(async () => {
-  const d = await loadTodos(), clean = [...new Set((Array.isArray(list) ? list : []).map((s) => str(s, 40)).filter(Boolean))].slice(0, 16);
+  const d = await loadTodos(), clean = [...new Set((Array.isArray(list) ? list : []).map((s) => str(s, 40)).filter(Boolean))].slice(0, 24);
   if (!clean.length) throw new Error('Keep at least one section');
   d.items.forEach((it) => { if (!clean.includes(it.section)) it.section = clean[0]; });
   d.sections = clean; await save(d); return d;
