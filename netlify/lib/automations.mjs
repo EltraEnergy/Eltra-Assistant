@@ -11,8 +11,9 @@
 //    a decline or other day is flagged to Ethan, no reply in 2 days → a follow-up to-do for Ethan (see install-check.mjs)
 //  • each morning, installs whose day has arrived (Eltra's jobs + Ethan's calendar) → "Send invoice to <customer>" and
 //    "Work out the GST on the <customer> job" for Ethan (Accounts, due on the install day, never doubled)
-//  • a job is signed → its newest Customer Quotes folder moves into Active Jobs (with its subfolders); once the DNSP
-//    commissioning to-do is ticked, the folder moves into Completed Jobs (see jobfolders.mjs)
+//  • a job is signed → its newest quote folder (Customer Quotes › Quoted Jobs, or loose in Customer Quotes) moves into
+//    Customer Quotes › Active Jobs (with its subfolders); once the DNSP commissioning to-do is ticked, the folder moves into
+//    Customer Quotes › Completed Jobs (see jobfolders.mjs)
 //  • every Monday morning → "Do payroll", every Saturday morning → "Do ServiceM8" (Ethan, Accounts, due that day)
 // Runs on a schedule (functions/automations.mjs) and whenever the dashboard loads the to-do list (at most every 15 min).
 import { store, runAs, melbToday } from './util.mjs';
@@ -23,7 +24,7 @@ import { claudeJSON } from './claude.mjs';
 import { sendWeeklySummaries, sendTo } from './weekly.mjs';
 import { loadJobs, saveJobs, upsertJob, setInstall, findJob, normName, PRE_APPROVAL_SECTION, preApprovalText, findPreApproval, preApprovalDue, syncPreApprovals } from './jobs.mjs';
 import { watchInstallChecks, isHold } from './install-check.mjs';
-import { jobFolderOnSigning, jobFolderDone } from './jobfolders.mjs';
+import { jobFolderOnSigning, jobFolderDone, jobFolderReport } from './jobfolders.mjs';
 
 const STATE = 'automations';
 const dayPlus = (n) => { const d = new Date(Date.now() + n * 864e5); return d.toLocaleDateString('en-CA', { timeZone: 'Australia/Melbourne' }); };
@@ -539,7 +540,7 @@ async function automationsAsWill({ force = false } = {}) {
         for (const t of signedTasks(name, design)) added.push(await addTodo({ ...t, ref: name + ' · auto' }));
         const jb = upsertJob(jobs, { name, projectId: p.id, kit: kitOf(design) });
         try { const t = await preApprovalOnSigning(jb, todos, today); if (t) added.push(t); } catch (e) { console.log('DNSP pre-approval to-do failed', name, e.message); }
-        // customer folder: Customer Quotes → Active Jobs (a Drive problem is saved on the job and never stops the rest)
+        // customer folder: Quoted Jobs → Active Jobs (a Drive problem is saved on the job and never stops the rest)
         if (!jb.folderId) {
           try { const f = await jobFolderOnSigning({ name, address: p.address }); jb.folderId = f.folderId; jb.folderUrl = f.folderUrl; jb.folderFrom = f.folderFrom; delete jb.folderError; }
           catch (e) { jb.folderError = String(e.message || e).slice(0, 300); console.log('customer folder failed', name, e.message); }
@@ -649,15 +650,28 @@ async function automationsAsWill({ force = false } = {}) {
       for (const jb of jobs.list) if (jb.installDate) jb.flags = { ...(jb.flags || {}), stock: true, ces: jb.installDate < inDays(-1), comm: jb.installDate < today };
       s.jobsInit = true;
     }
+    // jobs with no Drive folder yet (signed before Eltra moved folders, or moved into Active Jobs by hand): hourly, link the
+    // customer's folder already in Active Jobs so it can move to Completed Jobs later, and notice folders moved to Completed
+    // Jobs by hand. Nothing in Drive is changed here.
+    if (google.connected && !first && jobs.list.some((j) => !j.closed && (!j.folderId || (!j.folderDone && !j.commTodoId)))
+      && (!s.folderLinkAt || Date.now() - Date.parse(s.folderLinkAt) > 55 * 60000) && Date.now() - started < (force ? 15000 : 8000)) {
+      s.folderLinkAt = new Date().toISOString();
+      try { await jobFolderReport(jobs); } catch (e) { console.log('linking job folders failed', e.message); }
+    }
     let todoItems = null;   // loaded only when a job's folder is waiting on its commissioning to-do
     for (const jb of jobs.list) {
       const day = jb.installDate; if (!day || jb.closed) continue;
       jb.flags = jb.flags || {};
       // commissioning to-do ticked → the customer folder moves from Active Jobs to Completed Jobs
-      if (jb.folderId && !jb.folderDone && jb.commTodoId) {
+      if (jb.folderId && !jb.folderDone && (jb.commTodoId || jb.flags.comm)) {
         try {
           todoItems = todoItems || (await loadTodos()).items;
-          const ct = todoItems.find((t) => t.id === jb.commTodoId);
+          if (!jb.commTodoId) {   // a folder linked later: find the commissioning to-do that was already added for this customer
+            const low = normName(jb.name);
+            const found = low && todoItems.find((t) => /dnsp commissioning notice/i.test(t.text || '') && (' ' + normName(t.text) + ' ').includes(' ' + low + ' '));
+            if (found) jb.commTodoId = found.id;   // none (e.g. an older job): the folder stays until it's moved by hand
+          }
+          const ct = jb.commTodoId && todoItems.find((t) => t.id === jb.commTodoId);
           if (ct && ct.done) { await jobFolderDone(jb.folderId); jb.folderDone = new Date().toISOString(); delete jb.folderError; }
         } catch (e) { jb.folderError = String(e.message || e).slice(0, 300); console.log('moving folder to Completed Jobs failed', jb.name, e.message); }
       }
