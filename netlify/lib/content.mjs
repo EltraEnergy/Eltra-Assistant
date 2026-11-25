@@ -17,14 +17,22 @@ const uid = () => crypto.randomBytes(5).toString('hex');
 
 export async function loadContent() {
   const d = (await store().get(KEY, { type: 'json' })) || {};
-  return { settings: { ...DEFAULTS, ...(d.settings || {}) }, items: Array.isArray(d.items) ? d.items : [], learnings: d.learnings || null, edits: d.edits || [], log: d.log || [], lastRun: d.lastRun || null };
+  return { settings: { ...DEFAULTS, ...(d.settings || {}) }, items: Array.isArray(d.items) ? d.items : [], learnings: d.learnings || null, removed: Array.isArray(d.removed) ? d.removed : [], edits: d.edits || [], log: d.log || [], lastRun: d.lastRun || null };
 }
-const saveContent = (d) => { const cut = Date.now() - 42 * 864e5; d.items = d.items.filter((x) => !['posted', 'skipped', 'manual'].includes(x.status) || Date.parse(x.at || x.createdAt) > cut); return store().setJSON(KEY, d); };
+const saveContent = (d) => {
+  const cut = Date.now() - 42 * 864e5;
+  d.items = d.items.filter((x) => !['posted', 'skipped', 'manual'].includes(x.status) || Date.parse(x.at || x.createdAt) > cut);
+  d.removed = (d.removed || []).filter((x) => Date.parse(x.removedAt) > cut).slice(-100);
+  return store().setJSON(KEY, d);
+};
+// slots deleted from the schedule: the automatic fill leaves their date empty and doesn't reuse their topic
+const removedDates = (d) => new Set((d.removed || []).map((x) => x.date));
+const sameTopic = (a, b) => String(a || '').trim().toLowerCase() === String(b || '').trim().toLowerCase();
 const note = (d, msg) => { d.log = [{ at: new Date().toISOString(), msg }].concat(d.log || []).slice(0, 30); };
 
 // the posting slots for the next `aheadDays` days that have nothing in them yet
 function openSlots(d) {
-  const out = [], taken = new Set(d.items.filter((x) => x.status !== 'skipped').map((x) => x.date));
+  const out = [], taken = new Set(d.items.filter((x) => x.status !== 'skipped').map((x) => x.date).concat([...removedDates(d)]));
   for (let i = 1; i <= d.settings.aheadDays; i++) {
     const date = melbToday(i), dow = new Date(date + 'T12:00:00Z').getUTCDay();
     if (d.settings.days.includes(dow) && !taken.has(date)) out.push(date);
@@ -37,7 +45,7 @@ async function context(d) {
   const ctx = {};
   const voice = await store().get('ig-voice', { type: 'json' }).catch(() => null); ctx.voice = voice && voice.text ? voice.text.slice(0, 3000) : 'Not filled in yet: plain, friendly, local Melbourne solar and battery installer. Australian English.';
   ctx.learnings = d.learnings && d.learnings.text ? d.learnings.text : 'None yet.';
-  ctx.recentTopics = d.items.slice(-16).map((x) => x.date + ' ' + x.format + ': ' + x.topic);
+  ctx.recentTopics = d.items.slice(-16).map((x) => x.date + ' ' + x.format + ': ' + x.topic).concat((d.removed || []).slice(-10).map((x) => 'Deleted, don\'t use again: ' + x.topic));
   ctx.jobs = [];
   if (pylonReady()) {
     try {
@@ -71,6 +79,7 @@ export async function planSlots(d) {
   let n = 0;
   for (const p of ans.posts || []) {
     if (!slots.includes(p.date) || d.items.some((x) => x.date === p.date && x.status !== 'skipped')) continue;
+    if ((d.removed || []).some((x) => x.date === p.date || sameTopic(x.topic, p.topic))) continue;
     d.items.push({ id: uid(), date: p.date, at: slotTime(p.date, d.settings.time), format: p.format, topic: String(p.topic).slice(0, 120), angle: String(p.angle).slice(0, 400), status: 'planned', createdAt: new Date().toISOString() }); n++;
   }
   if (n) note(d, 'Planned ' + n + ' post' + (n > 1 ? 's' : ''));
@@ -190,6 +199,19 @@ export async function updateItem(id, patch, by = currentUser()) {
   if (patch.action === 'redraft') { it.status = 'planned'; it.feedback = patch.feedback || ''; }
   if (patch.action === 'retry') it.status = 'scheduled';
   await saveContent(d); return it;
+}
+// Delete posts from the schedule for good: one by id, or every skipped one (skipped: true). Nothing is posted or
+// changed on Instagram. The dates and topics are remembered so the automatic fill doesn't put them straight back.
+export async function deleteItems({ id, skipped } = {}, by = currentUser()) {
+  const d = await loadContent();
+  const gone = d.items.filter((x) => (id && x.id === id) || (skipped && x.status === 'skipped'));
+  if (id && !gone.length) throw new Error('That post is no longer in the schedule');
+  if (!gone.length) return [];
+  const ids = new Set(gone.map((x) => x.id)), now = new Date().toISOString();
+  d.items = d.items.filter((x) => !ids.has(x.id));
+  d.removed = (d.removed || []).concat(gone.map((x) => ({ date: x.date, topic: x.topic, removedAt: now, by })));
+  note(d, gone.length === 1 ? 'Deleted ' + gone[0].format + ' for ' + gone[0].date + ': ' + gone[0].topic : 'Deleted ' + gone.length + ' skipped posts');
+  await saveContent(d); return gone;
 }
 export async function saveSettings(patch) {
   const d = await loadContent(), s = d.settings;

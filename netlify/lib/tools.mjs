@@ -3,7 +3,7 @@ import { g, GMAIL, CAL, DRIVE, DRIVE_UP, accessToken } from './google.mjs';
 import { loadTodos, addTodo, updateTodo, addTodos, updateTodos, urgencyFor } from './todos.mjs';
 import { currentUser } from './util.mjs';
 import { loadPrefs, portalFor } from './prefs.mjs';
-import { loadContent, updateItem } from './content.mjs';
+import { loadContent, updateItem, deleteItems } from './content.mjs';
 import { addProposal, decide, loadImprove } from './improve.mjs';
 import { loadJobs, saveJobs, setInstall, parseDay, findJob, normName, syncPreApprovals } from './jobs.mjs';
 import { smsReady, smsProvider, smsSender, sendSms, auMobile, auMobileLocal } from './sms.mjs';
@@ -1024,7 +1024,7 @@ tool({
 // ---------- Content schedule (the weekly Instagram autopilot) ----------
 tool({
   name: 'content_schedule', group: 'core',
-  description: 'The Instagram content schedule Eltra keeps filled for the coming week: each slot\'s date, format (carousel, reel, story), topic, status (planned → draft → scheduled/manual → posted; or skipped/failed) and id. Drafts need Will or Ethan to approve them in the Content schedule panel on the dashboard before anything is posted.',
+  description: 'The Instagram content schedule Eltra keeps filled for the coming week: each slot\'s date, format (carousel, reel, story), topic, status (planned → draft → scheduled/manual → posted; or skipped/failed) and id. Deleted posts are not listed. Drafts need Will or Ethan to approve them in the Content schedule panel on the dashboard before anything is posted.',
   input_schema: { type: 'object', properties: {} },
   async run() {
     const d = await loadContent(), cut = Date.now() - 7 * 864e5;
@@ -1033,9 +1033,14 @@ tool({
 });
 tool({
   name: 'content_edit', group: 'core',
-  description: 'Change a post in the content schedule: move it (date YYYY-MM-DD), change its topic or angle, edit the caption, skip it, or send it back to be redrafted with feedback (action "redraft" plus feedback). Approving still happens on the dashboard.',
-  input_schema: { type: 'object', properties: { id: { type: 'string' }, action: { type: 'string', enum: ['edit', 'redraft', 'skip'] }, date: { type: 'string' }, topic: { type: 'string' }, angle: { type: 'string' }, caption: { type: 'string' }, feedback: { type: 'string' } }, required: ['id'] },
-  async run(i) { const it = await updateItem(i.id, { ...i, action: i.action === 'edit' ? undefined : i.action }); return { updated: { id: it.id, date: it.date, topic: it.topic, status: it.status }, note: i.action === 'redraft' ? 'Eltra will redraft it within about 10 minutes.' : undefined }; }
+  description: 'Change a post in the content schedule: move it (date YYYY-MM-DD), change its topic or angle, edit the caption, skip it, send it back to be redrafted with feedback (action "redraft" plus feedback), or delete it. Use "delete" (not "skip") whenever Will or Ethan asks to remove, delete or clear a post: it takes the slot out of the schedule for good and the automatic fill won\'t put that date or topic back. Action "clear_skipped" (no id needed) deletes every skipped post in one go; offer it when skipped posts are cluttering the schedule. Approving still happens on the dashboard.',
+  input_schema: { type: 'object', properties: { id: { type: 'string', description: 'the post id from content_schedule (not needed for clear_skipped)' }, action: { type: 'string', enum: ['edit', 'redraft', 'skip', 'delete', 'clear_skipped'] }, date: { type: 'string' }, topic: { type: 'string' }, angle: { type: 'string' }, caption: { type: 'string' }, feedback: { type: 'string' } } },
+  async run(i) {
+    if (i.action === 'clear_skipped') { const gone = await deleteItems({ skipped: true }); return { deleted: gone.map((x) => ({ date: x.date, topic: x.topic })), note: gone.length ? undefined : 'There were no skipped posts to clear.' }; }
+    if (!i.id) throw new Error('Which post? Give its id from content_schedule');
+    if (i.action === 'delete') { const [x] = await deleteItems({ id: i.id }); return { deleted: { id: x.id, date: x.date, topic: x.topic }, note: x.status === 'posted' ? 'Removed from the schedule only; the post is still on Instagram.' : 'Removed from the schedule. Eltra won\'t plan another post for that date.' }; }
+    const it = await updateItem(i.id, { ...i, action: i.action === 'edit' ? undefined : i.action }); return { updated: { id: it.id, date: it.date, topic: it.topic, status: it.status }, note: i.action === 'redraft' ? 'Eltra will redraft it within about 10 minutes.' : undefined };
+  }
 });
 
 // ---------- Improving Eltra (proposals need approval) ----------
