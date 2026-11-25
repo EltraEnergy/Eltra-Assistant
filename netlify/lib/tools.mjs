@@ -703,6 +703,9 @@ tool({
     const d = await loadTodos(), low = String(section || '').toLowerCase(), me = currentUser();
     const want = whose === 'everyone' ? null : whose === 'will' || whose === 'ethan' ? whose : me;
     const items = d.items.filter((x) => (include_done || !x.done) && (!want || x.owner === want || x.owner === 'both') && (!low || x.section.toLowerCase().includes(low) || (low.includes(x.section.toLowerCase()) && !/ - /.test(low))));
+    // grouped in section order (DNSP sub-sections first, in their fixed order), keeping each section's own order
+    const rank = (x) => { const i = d.sections.indexOf(x.section); return i < 0 ? d.sections.length : i; };
+    items.sort((a, b) => rank(a) - rank(b));
     return { sections: d.sections, items: items.map((x) => ({ id: x.id, section: x.section, text: x.text, for: x.owner, due: x.due || undefined, done: x.done || undefined, ref: x.ref || undefined, note: x.note || undefined, urgency: urgencyFor(x) || undefined, urgency_from_due: (!x.urgency && x.due) || undefined })) };
   }
 });
@@ -719,7 +722,7 @@ tool({
 });
 tool({
   name: 'todo_add', group: 'core',
-  description: 'Add a to-do. section: DNSP - Pre approval, DNSP - Grid connection, DNSP - Solar Vic, DNSP - Retailer request, Quoting, Order stock, Install dates (booking installs in), Accounts (invoicing, Xero/MYOB), Socials (Facebook/Instagram), Admin, or a new section name ("Parent - Sub" makes a sub-section). Ethan looks after Order stock, Install dates, Accounts and Socials; Will does DNSP, Quoting and the rest, so if for is not given and the task clearly belongs to the other person, set for to them. for: "me" (default, the person you are talking to), "will", "ethan" or "both". due: YYYY-MM-DD if a day was given. ref: customer or job it relates to. note: optional extra detail (what the customer said, what it is waiting on). urgency: optional red (urgent), yellow (soon) or green (can wait). To add several to-dos, put them all in items in ONE call (never several todo_add calls at once, or some can be lost), then check each result and tell the person about any that failed.',
+  description: 'Add a to-do. section: DNSP - Pre approval, DNSP - Grid connection, DNSP - CES, DNSP - Solar Vic, DNSP - Retailer request, Quoting, Order stock, Install dates (booking installs in), Accounts (invoicing, Xero/MYOB), Socials (Facebook/Instagram), Admin, or a new section name ("Parent - Sub" makes a sub-section). Ethan looks after Order stock, Install dates, Accounts and Socials; Will does DNSP, Quoting and the rest, so if for is not given and the task clearly belongs to the other person, set for to them. for: "me" (default, the person you are talking to), "will", "ethan" or "both". due: YYYY-MM-DD if a day was given. ref: customer or job it relates to. note: optional extra detail (what the customer said, what it is waiting on). urgency: optional red (urgent), yellow (soon) or green (can wait). To add several to-dos, put them all in items in ONE call (never several todo_add calls at once, or some can be lost), then check each result and tell the person about any that failed.',
   input_schema: { type: 'object', properties: { ...TODO_FIELDS, for: { type: 'string', enum: ['me', 'will', 'ethan', 'both'] }, items: { type: 'array', description: 'Several to-dos to add in one go, each with the same fields (text, section, for, due, ref, note, urgency).', items: { type: 'object', properties: { ...TODO_FIELDS, for: { type: 'string', enum: ['me', 'will', 'ethan', 'both'] } }, required: ['text'] } } } },
   async run({ items, ...i }) {
     if (Array.isArray(items) && items.length) {

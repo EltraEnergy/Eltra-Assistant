@@ -5,8 +5,9 @@ import crypto from 'node:crypto';
 const KEY = 'todos';
 const DEFAULT_SECTIONS = ['DNSP', 'Quoting', 'Order stock', 'Install dates', 'Accounts', 'Socials', 'Admin'];
 const ETHAN_SECTIONS = ['Install dates', 'Accounts', 'Socials'];
-// DNSP is split into these sub-sections (Will asked for this)
+// DNSP is split into these sub-sections (Will asked for this), always shown together in this order
 const DNSP_SUBS = ['DNSP - Pre approval', 'DNSP - Grid connection', 'DNSP - Solar Vic', 'DNSP - Retailer request'];
+const DNSP_ORDER = ['DNSP - Pre approval', 'DNSP - Grid connection', 'DNSP - CES', 'DNSP - Solar Vic', 'DNSP - Retailer request'];
 // Ethan looks after stock, socials, install dates and accounts/invoicing
 const ETHAN_WORK = /(stock|install date|booking|account|invoic|social)/i;
 // who a to-do is for: 'will', 'ethan' or 'both'
@@ -37,6 +38,7 @@ export async function loadTodos() {
   if (!d.teamSections) ETHAN_SECTIONS.forEach((x) => { if (!sections.some((y) => y.toLowerCase() === x.toLowerCase())) sections.splice(Math.max(0, sections.length - 1), 0, x); });   // one-off: add Ethan's sections
   // one-off: split "DNSP" into its sub-sections and move the existing DNSP to-dos into the right one
   if (!d.dnspSplit) splitDnsp(sections, d.items || []);
+  sections = orderDnsp(sections, d.items || []);
   // to-dos from before Ethan joined have no owner: give his kind of work to him, the rest to Will
   const guessOwner = (x) => ETHAN_WORK.test(x.section || '') || /(book the install|install date|order stock|invoice|xero|myob|instagram|facebook)/i.test(x.text || '') ? 'ethan' : 'will';
   // (older to-dos have no 'by' field; ones you've deliberately reassigned are marked ownerSet)
@@ -60,6 +62,21 @@ function splitDnsp(sections, items) {
   items.forEach((x) => { if (/^dnsp$/i.test(x.section || '')) { const to = dnspSubFor(x); if (to) x.section = sections.find((s) => s.toLowerCase() === to.toLowerCase()); } });
   // keep plain "DNSP" only while something is still in it
   if (!items.some((x) => /^dnsp$/i.test(x.section || ''))) sections.splice(sections.findIndex((s) => /^dnsp$/i.test(s)), 1);
+}
+// Will asked for this: the DNSP sub-sections always sit together in DNSP_ORDER, even when empty.
+// Any other "DNSP - …" sub-sections follow them; every other section keeps its place.
+function orderDnsp(sections, items) {
+  const k = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, '');
+  const isDnsp = (s) => /^dnsp\s*([-–—:].*)?$/i.test(s);
+  // a stored name that's the same as a fixed one bar case/spacing ("DNSP - Ces") becomes the fixed one, with its to-dos
+  const fixed = (s) => DNSP_ORDER.find((n) => k(n) === k(s));
+  items.forEach((x) => { const f = fixed(x.section); if (f) x.section = f; });
+  const at = sections.findIndex(isDnsp), start = at < 0 ? 0 : at;
+  const plain = sections.filter((s) => /^dnsp$/i.test(s));
+  const extra = sections.filter((s) => isDnsp(s) && !/^dnsp$/i.test(s) && !fixed(s));
+  const others = sections.filter((s) => !isDnsp(s));
+  const before = sections.slice(0, start).filter((s) => !isDnsp(s));
+  return [...before, ...plain, ...DNSP_ORDER, ...extra, ...others.slice(before.length)];
 }
 const save = (d) => store().setJSON(KEY, d);
 // One write at a time: each change loads, edits and saves the list before the next starts,
@@ -87,7 +104,8 @@ function pickSection(d, name, create) {
   }
   // DNSP words go to the matching DNSP sub-section if there is one
   const dnspSub = (/pre.?approv/.test(low) && d.sections.find((s) => /^dnsp\b.*pre.?approv/i.test(s))) || (/(grid|connection)/.test(low) && d.sections.find((s) => /^dnsp\b.*grid/i.test(s)))
-    || (/solar ?vic/.test(low) && d.sections.find((s) => /^dnsp\b.*solar ?vic/i.test(s))) || (/retailer/.test(low) && d.sections.find((s) => /^dnsp\b.*retailer/i.test(s)));
+    || (/solar ?vic/.test(low) && d.sections.find((s) => /^dnsp\b.*solar ?vic/i.test(s))) || (/retailer/.test(low) && d.sections.find((s) => /^dnsp\b.*retailer/i.test(s)))
+    || (/(\bces\b|electrical safety)/.test(low) && d.sections.find((s) => /^dnsp\b.*\bces\b/i.test(s)));
   const hit = dnspSub || d.sections.find((s) => s.toLowerCase().includes(low) || low.includes(s.toLowerCase()))
     || (/(stock|order|buy|supplier)/.test(low) && d.sections.find((s) => /stock/i.test(s))) || (/(quote|proposal|pylon)/.test(low) && d.sections.find((s) => /quot/i.test(s)))
     || (/(dnsp|pre.?approval|grid|powercor|citipower|jemena|ausnet|united)/.test(low) && d.sections.find((s) => /dnsp/i.test(s)))
