@@ -1149,38 +1149,35 @@
     var items = (CS.items || []).filter(function (x) { return x.status !== 'skipped' || Date.parse(x.at) > Date.now(); });
     panelCount('contH', items.length);
     if (!items.length) { var e = document.createElement('p'); e.className = 'note'; e.textContent = 'Eltra is planning the week. Drafts appear here within about half an hour, and each one waits for your OK.'; list.appendChild(e); }
-    // group by day; every upcoming weekday gets an "Add my own idea" button, even when it's empty or was deleted
-    var byDate = {}, dates = [], today = dayKey(new Date());
+    // group by week (Monday start), then by day; upcoming weekdays with nothing planned get a quiet "nothing planned" line
+    var byDate = {}, dates = [], today = dayKey(new Date()), thisWk = weekStart(today);
     items.forEach(function (it) { var k = it.date || dayKey(new Date(it.at)); if (!byDate[k]) { byDate[k] = []; dates.push(k); } byDate[k].push(it); });
     upcomingWeekdays().forEach(function (k) { if (!byDate[k]) { byDate[k] = []; dates.push(k); } });
     dates.sort();
+    var curWk = null, wkBox = null;
     dates.forEach(function (k) {
-      if (isWeekday(k) && k >= today) {
-        var hd = document.createElement('div'); hd.className = 'cday';
-        hd.innerHTML = '<span>' + esc(dateLabel(k)) + (byDate[k].length ? '' : ' · nothing planned') + '</span>';
-        var ad = document.createElement('button'); ad.type = 'button'; ad.className = 'copy'; ad.textContent = 'Add my own idea';
-        ad.onclick = function () { openAddIdea(k); };
-        hd.appendChild(ad); list.appendChild(hd);
+      var wk = weekStart(k);
+      if (wk !== curWk) {
+        curWk = wk; wkBox = document.createElement('section'); wkBox.className = 'cweek';
+        var nextWk = weekStart(dayKey(new Date(Date.parse(thisWk + 'T12:00:00Z') + 7 * 864e5)));
+        var h = document.createElement('h3'); h.className = 'cwk';
+        h.textContent = wk === thisWk ? 'This week' : wk === nextWk ? 'Next week' : wk < thisWk ? 'Week of ' + dateLabel(wk) + ' (past)' : 'Week of ' + dateLabel(wk);
+        wkBox.appendChild(h); list.appendChild(wkBox);
       }
-      byDate[k].forEach(function (it) {
-        var w = whenText(it), line = document.createElement('div'), b = document.createElement('button'); line.className = 'cline'; b.type = 'button'; b.className = 'crow'; b.setAttribute('role', 'row');
-        b.innerHTML = '<span class="when"><b>' + esc(w.day) + '</b><small>' + esc(w.time) + '</small></span><span class="fmt">' + esc(it.format) + '</span><span class="topic">' + (it.own ? '<span class="ownb">Own idea</span> ' : '') + esc(it.topic) + '</span><span class="st ' + esc(it.status) + '">' + esc(it.status === 'manual' && it.format === 'photo' ? 'To post' : STATUS[it.status] || it.status) + '</span>';
-        b.onclick = function () { showPost(it.id); };
-        line.appendChild(b);
-        if (it.status !== 'posted') {
-          var del = document.createElement('button'); del.type = 'button'; del.className = 'copy'; del.textContent = 'Delete'; del.setAttribute('aria-label', 'Delete ' + w.day + ' post: ' + it.topic);
-          del.onclick = function () { if (confirm('Delete this post from the schedule for good? Eltra won’t plan another one for that date.')) contentCall({ action: 'delete', id: it.id }).catch(function (er) { alert(er.message); }); };
-          line.appendChild(del);
-        }
-        list.appendChild(line);
-      });
+      if (!byDate[k].length) { var gap = document.createElement('p'); gap.className = 'cgap'; gap.textContent = dateLabel(k) + ' · nothing planned'; wkBox.appendChild(gap); return; }
+      byDate[k].forEach(function (it) { wkBox.appendChild(contentCard(it)); });
     });
     var nSkip = (CS.items || []).filter(function (x) { return x.status === 'skipped'; }).length;
     if (nSkip) {
-      var cl = document.createElement('button'); cl.type = 'button'; cl.className = 'btn no'; cl.textContent = 'Clear ' + nSkip + ' skipped post' + (nSkip > 1 ? 's' : '');
+      var cl = document.createElement('button'); cl.type = 'button'; cl.className = 'btn no sm cclear'; cl.textContent = 'Clear ' + nSkip + ' skipped post' + (nSkip > 1 ? 's' : '');
       cl.onclick = function () { if (confirm('Delete every skipped post from the schedule? Eltra won’t plan those dates again.')) contentCall({ action: 'clear_skipped' }).catch(function (e) { alert(e.message); }); };
       list.appendChild(cl);
     }
+    // captions are clamped to two lines; only offer "Show more" when the text is actually cut off
+    list.querySelectorAll('.ccap').forEach(function (cap) {
+      var more = cap.nextElementSibling, cut = cap.clientHeight ? cap.scrollHeight > cap.clientHeight + 1 : cap.textContent.length > 120;
+      if (more) more.hidden = !cut;
+    });
     var needs = items.filter(function (x) { return x.status === 'draft'; }).length, last = CS.log && CS.log[0];
     $('contStatus').textContent = (needs ? needs + ' post' + (needs > 1 ? 's need' : ' needs') + ' your OK. ' : '') + (CS.settings && CS.settings.paused ? 'Planning is paused. ' : '') + (last ? 'Latest: ' + last.msg + '.' : '');
     $('contWorksBox').textContent = CS.learnings && CS.learnings.text ? CS.learnings.text : 'Nothing yet. Once Instagram is connected and a few posts are out, Eltra reviews the numbers weekly and notes what works.';
@@ -1189,6 +1186,35 @@
     $('contTime').value = st.time || '18:30'; $('contReels').value = st.reelsPerWeek != null ? st.reelsPerWeek : 1; $('contPaused').checked = !!st.paused;
     if (openPost) { var cur = (CS.items || []).find(function (x) { return x.id === openPost; }); if (cur && $('postDlg').open && !$('postDlg').dataset.dirty) fillPost(cur); }
   }
+  // one card per post: header line (date · format · status), topic, caption (2 lines + Show more), then one row of actions.
+  // The actions are the same ones the post window offers, in a fixed order: Approve, Redraft, Edit, Skip, Delete.
+  function contentCard(it) {
+    var w = whenText(it), card = document.createElement('article'), s = it.status, cap = it.caption || it.angle || '';
+    card.className = 'ccard st-' + s;
+    card.innerHTML = '<div class="chead"><span class="when"><b>' + esc(w.day) + '</b> ' + esc(w.time) + '</span><span class="fmt">' + esc(it.format) + '</span>' + (it.own ? '<span class="ownb">Own idea</span>' : '') +
+      '<span class="st ' + esc(s) + '">' + esc(s === 'manual' && it.format === 'photo' ? 'To post' : STATUS[s] || s) + '</span></div>' +
+      '<button type="button" class="ctopic">' + esc(it.topic) + '</button>' +
+      (cap ? '<p class="ccap' + (it.caption ? '' : ' angle') + '">' + esc(cap) + '</p><button type="button" class="cmore" aria-expanded="false" hidden>Show more</button>' : '') +
+      '<div class="cacts"></div>';
+    card.querySelector('.ctopic').onclick = function () { showPost(it.id); };
+    var more = card.querySelector('.cmore');
+    if (more) more.onclick = function () { var open = card.classList.toggle('open'); more.textContent = open ? 'Show less' : 'Show more'; more.setAttribute('aria-expanded', open ? 'true' : 'false'); };
+    var row = card.querySelector('.cacts'), act = function (label, cls, fn, aria) { var x = document.createElement('button'); x.type = 'button'; x.className = 'btn sm ' + cls; x.textContent = label; if (aria) x.setAttribute('aria-label', aria); x.onclick = fn; row.appendChild(x); return x; };
+    var fail = function (b) { return function (er) { if (b) b.disabled = false; alert(er.message); }; };
+    if (s === 'draft' || s === 'failed') {
+      act('Approve', 'ca-ok', function (e) {
+        // carousels need their slides drawn and uploaded first, which the post window does: open it and approve from there
+        if (it.format === 'carousel') { showPost(it.id); var ab = $('pdFoot').querySelector('[data-approve]'); if (ab) ab.click(); return; }
+        var b = e.target; b.disabled = true; contentCall({ action: 'approve', id: it.id }).catch(fail(b));
+      });
+      act('Redraft', 'no', function () { var fb = prompt('What should Eltra change?'); if (fb !== null) contentCall({ action: 'redraft', feedback: fb, id: it.id }).catch(fail()); });
+    }
+    act(s === 'posted' || s === 'manual' || s === 'skipped' ? 'Open' : 'Edit', 'no', function () { showPost(it.id); });
+    if (s === 'draft' || s === 'failed' || s === 'planned') act('Skip', 'no', function () { contentCall({ action: 'skip', id: it.id }).catch(fail()); });
+    if (s !== 'posted') act('Delete', 'no ca-del', function () { if (confirm('Delete this post from the schedule for good? Eltra won’t plan another one for that date.')) contentCall({ action: 'delete', id: it.id }).catch(fail()); }, 'Delete ' + w.day + ' post: ' + it.topic);
+    return card;
+  }
+  function weekStart(k) { var d = new Date(k + 'T12:00:00Z'), n = (d.getUTCDay() + 6) % 7; return new Date(d.getTime() - n * 864e5).toISOString().slice(0, 10); }
   // ---- add my own idea by hand (weekdays only) ----
   function isWeekday(k) { var n = new Date(k + 'T12:00:00Z').getUTCDay(); return n >= 1 && n <= 5; }
   function dateLabel(k) { return new Date(k + 'T12:00:00Z').toLocaleDateString('en-AU', { timeZone: 'UTC', weekday: 'short', day: 'numeric', month: 'short' }); }
@@ -1197,6 +1223,7 @@
     var today = dayKey(new Date()); $('contAddDate').min = today; $('contAddDate').value = k || ''; $('contAddErr').hidden = true;
     $('contAdd').hidden = false; $('contAddIdea').focus();
   }
+  $('contAddBtn').onclick = function () { var empty = upcomingWeekdays().filter(function (k) { return !(CS.items || []).some(function (x) { return (x.date || dayKey(new Date(x.at))) === k && x.status !== 'skipped'; }); }); openAddIdea(empty[0] || ''); };
   $('contAddCancel').onclick = function () { $('contAdd').hidden = true; };
   $('contAddSave').onclick = function () {
     var k = $('contAddDate').value, idea = $('contAddIdea').value.trim(), err = function (m) { $('contAddErr').textContent = m; $('contAddErr').hidden = false; };
@@ -1242,7 +1269,7 @@
       btn('Skip', 'no', function () { postAction({ action: 'skip' }); });
       btn('Redraft…', 'no', function () { var fb = prompt('What should Eltra change?'); if (fb !== null) postAction({ action: 'redraft', feedback: fb }); });
       btn('Save changes', 'no', function () { postAction(edits()); });
-      btn(it.format === 'carousel' ? 'Approve & schedule' : 'Approve', '', function (e) { approvePost(it, e.target); });
+      btn(it.format === 'carousel' ? 'Approve & schedule' : 'Approve', '', function (e) { approvePost(it, e.target); }).dataset.approve = '1';
     } else if (it.status === 'manual' && it.format === 'photo') {
       btn('Post to Instagram', '', function () { postPhoto(it); });
     } else if (it.status === 'scheduled') {
