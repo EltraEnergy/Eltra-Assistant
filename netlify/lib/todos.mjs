@@ -7,7 +7,7 @@ const DEFAULT_SECTIONS = ['DNSP', 'Quoting', 'Order stock', 'Install dates', 'Ac
 const ETHAN_SECTIONS = ['Install dates', 'Accounts', 'Socials'];
 // DNSP is split into these sub-sections (Will asked for this), always shown together in this order
 const DNSP_SUBS = ['DNSP - Pre approval', 'DNSP - Grid connection', 'DNSP - Solar Vic', 'DNSP - Retailer request'];
-const DNSP_ORDER = ['DNSP - Pre approval', 'DNSP - Grid connection', 'DNSP - CES', 'DNSP - Solar Vic', 'DNSP - Retailer request'];
+const DNSP_ORDER = ['DNSP - Solar Vic', 'DNSP - Pre approval', 'DNSP - CES', 'DNSP - Grid connection', 'DNSP - Retailer request'];   // the order the jobs happen
 // Ethan looks after stock, socials, install dates and accounts/invoicing
 const ETHAN_WORK = /(stock|install date|booking|account|invoic|social)/i;
 // who a to-do is for: 'will', 'ethan' or 'both'
