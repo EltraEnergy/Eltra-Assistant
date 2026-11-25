@@ -1526,12 +1526,13 @@
       b.innerHTML = esc(label) + (n ? '<span class="n">' + n + '</span>' : '');
       parent.appendChild(b); return b;
     };
+    // picking All or a plain section (e.g. Admin) folds away any opened sub-section row
     // top row: All, then each plain section or parent tab. On "Mine", only show the ones where you actually have something to do
-    tabBtn('All', 'All', count('All'), secs).onclick = function () { todoTab = 'All'; renderTodos(); };
+    tabBtn('All', 'All', count('All'), secs).onclick = function () { todoTab = 'All'; todoOpen = ''; renderTodos(); };
     groups.forEach(function (g) {
       var tab = g.subs ? '*' + g.name : g.name, inG = g.subs && (todoTab === tab || g.secs.indexOf(todoTab) >= 0), n = count(tab);
       if (todoWho !== 'all' && !n && !inG && tab !== todoTab) return;
-      if (!g.subs) { tabBtn(g.name, tab, n, secs).onclick = function () { todoTab = tab; $('todoSec').value = tab; renderTodos(); }; return; }
+      if (!g.subs) { tabBtn(g.name, tab, n, secs).onclick = function () { todoTab = tab; todoOpen = ''; $('todoSec').value = tab; renderTodos(); }; return; }
       var isOpen = todoOpen === g.name, b = tabBtn(g.name, tab, n, secs);
       if (inG) b.setAttribute('aria-selected', 'true');
       b.setAttribute('aria-expanded', isOpen); b.setAttribute('aria-controls', 'todoSubs');
