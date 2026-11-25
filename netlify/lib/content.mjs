@@ -106,6 +106,12 @@ export async function draftOne(d, id) {
     const script = (best ? best.hook + '\n' : '') + humanize(a.script).text, beats = beatSheet(script, 165, 30);
     it.hooks = ranked.ranked.map((r) => r.score + ' ' + r.verdict + ': ' + r.hook); it.script = script; it.shots = a.shots || ''; it.beats = beats.notes;
     it.caption = humanize(a.caption).text; it.check = { hook: best ? best.score + ' ' + best.verdict : '', caption: captionLint(it.caption).verdict };
+  } else if (it.format === 'photo') {
+    const a = await claudeJSON({ system: sys + '\n\nCaption guide:\n' + SKILLS['ig-caption'].body.slice(0, 3000),
+      prompt: 'Write the single-photo post for ' + it.date + '. Topic: ' + it.topic + '. Angle: ' + it.angle + (it.feedback ? '\nChanges asked for: ' + it.feedback : '') + '\nRecent jobs:\n' + (ctx.jobs.join('\n') || 'none') + '\nSay what photo to take or use (one or two lines), then the caption (first line works before "… more", one ask, up to 5 specific hashtags at the end).',
+      schema: { type: 'object', properties: { shot: { type: 'string', description: 'what the photo should show' }, caption: { type: 'string' } }, required: ['shot', 'caption'] }, maxTokens: 1500 });
+    const h = humanize(a.caption);
+    it.shots = a.shot || ''; it.caption = h.text; it.check = { verdict: detect(h.text).verdict, caption: captionLint(h.text).verdict, flags: h.flags.slice(0, 4) };
   } else {
     const a = await claudeJSON({ system: sys + '\n\nStory guide:\n' + SKILLS['ig-story'].body.slice(0, 3500),
       prompt: 'Plan the story sequence for ' + it.date + '. Topic: ' + it.topic + '. Angle: ' + it.angle + '. 3-6 frames: what to show, the words on each, and which sticker (poll, question, quiz, link) where.',
@@ -127,7 +133,7 @@ export async function publishDue(d) {
     }
     if (it.status === 'manual' && !it.reminded && it.date <= melbToday(0)) {
       it.reminded = true;
-      await addTodo({ section: 'Socials', text: (it.format === 'reel' ? 'Film and post the Reel: ' : 'Post the story: ') + it.topic, due: it.date, owner: 'ethan', ref: 'auto' }).catch(() => {});
+      await addTodo({ section: 'Socials', text: (it.format === 'reel' ? 'Film and post the Reel: ' : it.format === 'photo' ? 'Post the photo: ' : 'Post the story: ') + it.topic, due: it.date, owner: 'ethan', ref: 'auto' }).catch(() => {});
     }
   }
   if (done.length) note(d, 'Posted: ' + done.join(', '));
@@ -199,6 +205,41 @@ export async function updateItem(id, patch, by = currentUser()) {
   if (patch.action === 'redraft') { it.status = 'planned'; it.feedback = patch.feedback || ''; }
   if (patch.action === 'retry') it.status = 'scheduled';
   await saveContent(d); return it;
+}
+// Add a post on a chosen weekday (from Eltra). It goes in as "planned", so the background run drafts it like the
+// automatic fill does. A date that was deleted earlier can be filled again this way.
+export const FORMATS = ['photo', 'carousel', 'reel', 'story'];
+export async function addItem({ date, format, topic, angle } = {}, by = currentUser()) {
+  date = String(date || '').trim(); format = String(format || '').trim().toLowerCase(); topic = String(topic || '').trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || isNaN(Date.parse(date + 'T12:00:00Z'))) throw new Error('Give the date as YYYY-MM-DD');
+  const dow = new Date(date + 'T12:00:00Z').getUTCDay();
+  if (dow === 0 || dow === 6) throw new Error(date + ' is a ' + DAYS[dow] + '. New posts can only go on a weekday (Mon–Fri).');
+  if (date < melbToday(0)) throw new Error(date + ' has already passed');
+  if (!FORMATS.includes(format)) throw new Error('Format must be one of: ' + FORMATS.join(', '));
+  if (!topic) throw new Error('What\'s the post about? Give a topic');
+  const d = await loadContent();
+  const clash = d.items.find((x) => x.date === date && x.status !== 'skipped');
+  if (clash) throw new Error(DAYS[dow] + ' ' + date + ' already has a ' + clash.format + ': ' + clash.topic + ' (id ' + clash.id + '). Pick another day, or change that post instead.');
+  const it = { id: uid(), date, at: slotTime(date, d.settings.time), format, topic: topic.slice(0, 120), angle: String(angle || '').trim().slice(0, 400), status: 'planned', addedBy: by, createdAt: new Date().toISOString() };
+  d.items.push(it);
+  note(d, 'Added ' + format + ' for ' + date + ': ' + it.topic);
+  await saveContent(d); return it;
+}
+// Posts and Reels in each week (Mon–Sun) from this week to the end of the planning window, and the weekdays still empty.
+export function weekSummary(d) {
+  const today = melbToday(0), back = (new Date(today + 'T12:00:00Z').getUTCDay() + 6) % 7;
+  const live = d.items.filter((x) => x.status !== 'skipped');
+  const last = live.map((x) => x.date).concat([melbToday(d.settings.aheadDays)]).sort().pop();
+  const out = [];
+  for (let w = 0; w < 8; w++) {
+    const days = [...Array(7)].map((_, i) => melbToday(i - back + w * 7));
+    if (days[0] > last) break;
+    const inWeek = live.filter((x) => x.date >= days[0] && x.date <= days[6]);
+    const count = (f) => inWeek.filter((x) => x.format === f).length;
+    out.push({ week_of: days[0], posts: inWeek.length, reels: count('reel'), carousels: count('carousel'), photos: count('photo'), stories: count('story'),
+      empty_weekdays: days.slice(0, 5).filter((x) => x >= today && !inWeek.some((p) => p.date === x)).map((x) => DAYS[new Date(x + 'T12:00:00Z').getUTCDay()] + ' ' + x) });
+  }
+  return out;
 }
 // Delete posts from the schedule for good: one by id, or every skipped one (skipped: true). Nothing is posted or
 // changed on Instagram. The dates and topics are remembered so the automatic fill doesn't put them straight back.

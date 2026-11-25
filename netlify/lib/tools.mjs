@@ -3,7 +3,7 @@ import { g, GMAIL, CAL, DRIVE, DRIVE_UP, accessToken } from './google.mjs';
 import { loadTodos, addTodo, updateTodo, addTodos, updateTodos, urgencyFor } from './todos.mjs';
 import { currentUser } from './util.mjs';
 import { loadPrefs, portalFor } from './prefs.mjs';
-import { loadContent, updateItem, deleteItems } from './content.mjs';
+import { loadContent, updateItem, deleteItems, addItem, weekSummary } from './content.mjs';
 import { addProposal, decide, loadImprove } from './improve.mjs';
 import { loadJobs, saveJobs, setInstall, parseDay, findJob, normName, syncPreApprovals } from './jobs.mjs';
 import { jobFolderReport } from './jobfolders.mjs';
@@ -1028,18 +1028,19 @@ tool({
 // ---------- Content schedule (the weekly Instagram autopilot) ----------
 tool({
   name: 'content_schedule', group: 'core',
-  description: 'The Instagram content schedule Eltra keeps filled for the coming week: each slot\'s date, format (carousel, reel, story), topic, status (planned → draft → scheduled/manual → posted; or skipped/failed) and id. Deleted posts are not listed. Drafts need Will or Ethan to approve them in the Content schedule panel on the dashboard before anything is posted.',
+  description: 'The Instagram content schedule Eltra keeps filled for the coming week: each slot\'s date, format (photo, carousel, reel, story), topic, status (planned → draft → scheduled/manual → posted; or skipped/failed) and id. Deleted posts are not listed. weeks gives each week (Mon–Sun, from this week on) with how many posts and Reels it has and which weekdays are still empty; use it to spot gaps and check the weekly mix (e.g. 5 posts with at least 3 Reels), then fill gaps with content_edit action "add". Drafts need Will or Ethan to approve them in the Content schedule panel on the dashboard before anything is posted.',
   input_schema: { type: 'object', properties: {} },
   async run() {
     const d = await loadContent(), cut = Date.now() - 7 * 864e5;
-    return { settings: d.settings, what_works: d.learnings && d.learnings.text, items: d.items.filter((x) => Date.parse(x.at || x.createdAt) > cut).map((x) => ({ id: x.id, date: x.date, format: x.format, topic: x.topic, status: x.status, caption: x.caption ? x.caption.slice(0, 300) : undefined, link: x.link, error: x.error })) };
+    return { settings: d.settings, what_works: d.learnings && d.learnings.text, weeks: weekSummary(d), items: d.items.filter((x) => Date.parse(x.at || x.createdAt) > cut).map((x) => ({ id: x.id, date: x.date, format: x.format, topic: x.topic, status: x.status, caption: x.caption ? x.caption.slice(0, 300) : undefined, link: x.link, error: x.error })) };
   }
 });
 tool({
   name: 'content_edit', group: 'core',
-  description: 'Change a post in the content schedule: move it (date YYYY-MM-DD), change its topic or angle, edit the caption, skip it, send it back to be redrafted with feedback (action "redraft" plus feedback), or delete it. Use "delete" (not "skip") whenever Will or Ethan asks to remove, delete or clear a post: it takes the slot out of the schedule for good and the automatic fill won\'t put that date or topic back. Action "clear_skipped" (no id needed) deletes every skipped post in one go; offer it when skipped posts are cluttering the schedule. Approving still happens on the dashboard.',
-  input_schema: { type: 'object', properties: { id: { type: 'string', description: 'the post id from content_schedule (not needed for clear_skipped)' }, action: { type: 'string', enum: ['edit', 'redraft', 'skip', 'delete', 'clear_skipped'] }, date: { type: 'string' }, topic: { type: 'string' }, angle: { type: 'string' }, caption: { type: 'string' }, feedback: { type: 'string' } } },
+  description: 'Change a post in the content schedule: move it (date YYYY-MM-DD), change its topic or angle, edit the caption, skip it, send it back to be redrafted with feedback (action "redraft" plus feedback), or delete it. Use "delete" (not "skip") whenever Will or Ethan asks to remove, delete or clear a post: it takes the slot out of the schedule for good and the automatic fill won\'t put that date or topic back. Action "clear_skipped" (no id needed) deletes every skipped post in one go; offer it when skipped posts are cluttering the schedule. Action "add" (no id needed) puts a new post on an empty weekday: give date (YYYY-MM-DD, Mon–Fri, not in the past), format (photo, carousel, reel or story), topic and optionally angle; Eltra drafts it in the background like the automatic fill. Approving still happens on the dashboard.',
+  input_schema: { type: 'object', properties: { id: { type: 'string', description: 'the post id from content_schedule (not needed for add or clear_skipped)' }, action: { type: 'string', enum: ['add', 'edit', 'redraft', 'skip', 'delete', 'clear_skipped'] }, date: { type: 'string' }, format: { type: 'string', enum: ['photo', 'carousel', 'reel', 'story'], description: 'for add: the kind of post' }, topic: { type: 'string' }, angle: { type: 'string' }, caption: { type: 'string' }, feedback: { type: 'string' } } },
   async run(i) {
+    if (i.action === 'add') { const it = await addItem(i); return { added: { id: it.id, date: it.date, format: it.format, topic: it.topic, status: it.status }, note: 'Added to the schedule. Eltra will draft it within about half an hour, then it needs approving on the dashboard.' }; }
     if (i.action === 'clear_skipped') { const gone = await deleteItems({ skipped: true }); return { deleted: gone.map((x) => ({ date: x.date, topic: x.topic })), note: gone.length ? undefined : 'There were no skipped posts to clear.' }; }
     if (!i.id) throw new Error('Which post? Give its id from content_schedule');
     if (i.action === 'delete') { const [x] = await deleteItems({ id: i.id }); return { deleted: { id: x.id, date: x.date, topic: x.topic }, note: x.status === 'posted' ? 'Removed from the schedule only; the post is still on Instagram.' : 'Removed from the schedule. Eltra won\'t plan another post for that date.' }; }
