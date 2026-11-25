@@ -1130,6 +1130,12 @@
       b.onclick = function () { showPost(it.id); };
       list.appendChild(b);
     });
+    var nSkip = (CS.items || []).filter(function (x) { return x.status === 'skipped'; }).length;
+    if (nSkip) {
+      var cl = document.createElement('button'); cl.type = 'button'; cl.className = 'btn no'; cl.textContent = 'Clear ' + nSkip + ' skipped post' + (nSkip > 1 ? 's' : '');
+      cl.onclick = function () { if (confirm('Delete every skipped post from the schedule? Eltra won’t plan those dates again.')) contentCall({ action: 'clear_skipped' }).catch(function (e) { alert(e.message); }); };
+      list.appendChild(cl);
+    }
     var needs = items.filter(function (x) { return x.status === 'draft'; }).length, last = CS.log && CS.log[0];
     $('contStatus').textContent = (needs ? needs + ' post' + (needs > 1 ? 's need' : ' needs') + ' your OK. ' : '') + (CS.settings && CS.settings.paused ? 'Planning is paused. ' : '') + (last ? 'Latest: ' + last.msg + '.' : '');
     $('contWorksBox').textContent = CS.learnings && CS.learnings.text ? CS.learnings.text : 'Nothing yet. Once Instagram is connected and a few posts are out, Eltra reviews the numbers weekly and notes what works.';
@@ -1175,6 +1181,7 @@
     } else if (it.status === 'planned') {
       btn('Skip', 'no', function () { postAction({ action: 'skip' }); });
     }
+    if (it.status !== 'posted') btn('Delete', 'no', function () { if (confirm('Delete this post from the schedule for good? Eltra won’t plan another one for that date.')) postAction({ action: 'delete' }); });
   }
   function currentSlides() { var out = []; $('pdBody').querySelectorAll('[data-sh]').forEach(function (el) { var i = +el.dataset.sh; out[i] = { heading: el.value, body: ($('pdBody').querySelector('[data-sb="' + i + '"]') || {}).value || '' }; }); return out; }
   function redrawPost() { var sl = currentSlides(); if (!sl.length) return; var car = { slides: sl }; $('pdBody').querySelectorAll('canvas.slide').forEach(function (cv) { drawSlide(cv, car, +cv.dataset.ps, 0.2); }); }
