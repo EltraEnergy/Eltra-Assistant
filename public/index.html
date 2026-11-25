@@ -410,6 +410,13 @@
   .cset .days { display: flex; flex-wrap: wrap; gap: 6px; }
   .cset .days label { display: inline-flex; gap: 5px; align-items: center; background: #fff; border-radius: 999px; padding: 5px 10px; font-size: 14px; }
   .cset input[type=time], .cset input[type=number] { font: inherit; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; max-width: 160px; }
+  .cday { display: flex; justify-content: space-between; align-items: center; gap: 10px; padding: 10px 6px 2px; border-top: 1px solid var(--line); font-size: 13.5px; font-weight: 700; color: var(--muted); }
+  .cline { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 4px; }
+  .cday + .cline .crow { border-top: 0; }
+  .ownb { font-size: 12px; font-weight: 700; border-radius: 999px; padding: 2px 8px; background: #E2F4EC; color: #17845D; }
+  .cset input[type=date], .cset select, .cset textarea { font: inherit; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; max-width: 100%; box-sizing: border-box; }
+  .cset input[type=date], .cset select { max-width: 220px; }
+  #contAdd label { display: grid; gap: 4px; } #contAdd .row { display: flex; gap: 8px; flex-wrap: wrap; }
   .works { white-space: pre-wrap; background: var(--paper); border-radius: 12px; padding: 12px; margin-top: 10px; }
   /* post dialog */
   #postDlg { border: 0; border-radius: 16px; padding: 0; width: min(760px, 100% - 24px); max-height: calc(100% - 24px); }
@@ -559,6 +566,15 @@
     <div class="hb">
       <p class="note" id="contStatus"></p>
       <div class="ctable" role="table" aria-label="Upcoming Instagram posts" id="contList"></div>
+      <div class="cset" id="contAdd" hidden>
+        <div class="f">Add my own idea</div>
+        <label class="f">Date (Monday to Friday)<input type="date" id="contAddDate"></label>
+        <label class="f">Format<select id="contAddFmt"><option value="photo">Photo</option><option value="carousel" selected>Carousel</option><option value="reel">Reel</option><option value="story">Story</option></select></label>
+        <label class="f">Topic or idea<textarea id="contAddIdea" rows="3" placeholder="What should this post be about?"></textarea></label>
+        <p class="note err" id="contAddErr" role="alert" hidden></p>
+        <p class="note">Eltra drafts it around your idea, then it waits for your OK here like any other post.</p>
+        <div class="row"><button type="button" class="btn" id="contAddSave">Save</button> <button type="button" class="btn no" id="contAddCancel">Cancel</button></div>
+      </div>
       <div class="cset" id="contSettings" hidden>
         <div class="f">Post on</div>
         <div class="days" id="contDays"></div>

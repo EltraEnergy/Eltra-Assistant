@@ -1149,11 +1149,31 @@
     var items = (CS.items || []).filter(function (x) { return x.status !== 'skipped' || Date.parse(x.at) > Date.now(); });
     panelCount('contH', items.length);
     if (!items.length) { var e = document.createElement('p'); e.className = 'note'; e.textContent = 'Eltra is planning the week. Drafts appear here within about half an hour, and each one waits for your OK.'; list.appendChild(e); }
-    items.forEach(function (it) {
-      var w = whenText(it), b = document.createElement('button'); b.type = 'button'; b.className = 'crow'; b.setAttribute('role', 'row');
-      b.innerHTML = '<span class="when"><b>' + esc(w.day) + '</b><small>' + esc(w.time) + '</small></span><span class="fmt">' + esc(it.format) + '</span><span class="topic">' + esc(it.topic) + '</span><span class="st ' + esc(it.status) + '">' + esc(it.status === 'manual' && it.format === 'photo' ? 'To post' : STATUS[it.status] || it.status) + '</span>';
-      b.onclick = function () { showPost(it.id); };
-      list.appendChild(b);
+    // group by day; every upcoming weekday gets an "Add my own idea" button, even when it's empty or was deleted
+    var byDate = {}, dates = [], today = dayKey(new Date());
+    items.forEach(function (it) { var k = it.date || dayKey(new Date(it.at)); if (!byDate[k]) { byDate[k] = []; dates.push(k); } byDate[k].push(it); });
+    upcomingWeekdays().forEach(function (k) { if (!byDate[k]) { byDate[k] = []; dates.push(k); } });
+    dates.sort();
+    dates.forEach(function (k) {
+      if (isWeekday(k) && k >= today) {
+        var hd = document.createElement('div'); hd.className = 'cday';
+        hd.innerHTML = '<span>' + esc(dateLabel(k)) + (byDate[k].length ? '' : ' · nothing planned') + '</span>';
+        var ad = document.createElement('button'); ad.type = 'button'; ad.className = 'copy'; ad.textContent = 'Add my own idea';
+        ad.onclick = function () { openAddIdea(k); };
+        hd.appendChild(ad); list.appendChild(hd);
+      }
+      byDate[k].forEach(function (it) {
+        var w = whenText(it), line = document.createElement('div'), b = document.createElement('button'); line.className = 'cline'; b.type = 'button'; b.className = 'crow'; b.setAttribute('role', 'row');
+        b.innerHTML = '<span class="when"><b>' + esc(w.day) + '</b><small>' + esc(w.time) + '</small></span><span class="fmt">' + esc(it.format) + '</span><span class="topic">' + (it.own ? '<span class="ownb">Own idea</span> ' : '') + esc(it.topic) + '</span><span class="st ' + esc(it.status) + '">' + esc(it.status === 'manual' && it.format === 'photo' ? 'To post' : STATUS[it.status] || it.status) + '</span>';
+        b.onclick = function () { showPost(it.id); };
+        line.appendChild(b);
+        if (it.status !== 'posted') {
+          var del = document.createElement('button'); del.type = 'button'; del.className = 'copy'; del.textContent = 'Delete'; del.setAttribute('aria-label', 'Delete ' + w.day + ' post: ' + it.topic);
+          del.onclick = function () { if (confirm('Delete this post from the schedule for good? Eltra won’t plan another one for that date.')) contentCall({ action: 'delete', id: it.id }).catch(function (er) { alert(er.message); }); };
+          line.appendChild(del);
+        }
+        list.appendChild(line);
+      });
     });
     var nSkip = (CS.items || []).filter(function (x) { return x.status === 'skipped'; }).length;
     if (nSkip) {
@@ -1169,6 +1189,27 @@
     $('contTime').value = st.time || '18:30'; $('contReels').value = st.reelsPerWeek != null ? st.reelsPerWeek : 1; $('contPaused').checked = !!st.paused;
     if (openPost) { var cur = (CS.items || []).find(function (x) { return x.id === openPost; }); if (cur && $('postDlg').open && !$('postDlg').dataset.dirty) fillPost(cur); }
   }
+  // ---- add my own idea by hand (weekdays only) ----
+  function isWeekday(k) { var n = new Date(k + 'T12:00:00Z').getUTCDay(); return n >= 1 && n <= 5; }
+  function dateLabel(k) { return new Date(k + 'T12:00:00Z').toLocaleDateString('en-AU', { timeZone: 'UTC', weekday: 'short', day: 'numeric', month: 'short' }); }
+  function upcomingWeekdays() { var out = [], n = (CS.settings && CS.settings.aheadDays) || 8; for (var i = 0; i <= n; i++) { var k = dayKey(new Date(Date.now() + i * 864e5)); if (isWeekday(k)) out.push(k); } return out; }
+  function openAddIdea(k) {
+    var today = dayKey(new Date()); $('contAddDate').min = today; $('contAddDate').value = k || ''; $('contAddErr').hidden = true;
+    $('contAdd').hidden = false; $('contAddIdea').focus();
+  }
+  $('contAddCancel').onclick = function () { $('contAdd').hidden = true; };
+  $('contAddSave').onclick = function () {
+    var k = $('contAddDate').value, idea = $('contAddIdea').value.trim(), err = function (m) { $('contAddErr').textContent = m; $('contAddErr').hidden = false; };
+    if (!k) return err('Pick a date.');
+    if (!isWeekday(k)) return err('Pick a weekday (Monday to Friday).');
+    if (k < dayKey(new Date())) return err('That date has already passed.');
+    if (!idea) return err('Write your topic or idea.');
+    var b = $('contAddSave'); b.disabled = true;
+    contentCall({ action: 'add', date: k, format: $('contAddFmt').value, idea: idea })
+      .then(function () { $('contAdd').hidden = true; $('contAddIdea').value = ''; })
+      .catch(function (e) { err(e.message); })
+      .then(function () { b.disabled = false; });
+  };
   $('contSet').onclick = function () { $('contSettings').hidden = !$('contSettings').hidden; };
   $('contWorks').onclick = function () { $('contWorksBox').hidden = !$('contWorksBox').hidden; };
   $('contSaveSet').onclick = function () {

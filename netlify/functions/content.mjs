@@ -1,6 +1,6 @@
 // Content schedule for the dashboard. GET: schedule + settings + what works. POST { action, id, … }.
 import { json, guard } from '../lib/util.mjs';
-import { loadContent, updateItem, deleteItems, saveSettings, saveContent } from '../lib/content.mjs';
+import { loadContent, updateItem, deleteItems, addOwnIdea, saveSettings, saveContent } from '../lib/content.mjs';
 export default async (req) => {
   const bad = guard(req); if (bad) return bad;
   try {
@@ -9,6 +9,7 @@ export default async (req) => {
       if (b.action === 'settings') await saveSettings(b);
       else if (b.action === 'wake') { const d = await loadContent(); d.wakeAt = new Date().toISOString(); await saveContent(d); }
       else if (b.action === 'delete') await deleteItems({ id: b.id });
+      else if (b.action === 'add') await addOwnIdea(b);
       else if (b.action === 'clear_skipped') await deleteItems({ skipped: true });
       else await updateItem(b.id, b);
     }
