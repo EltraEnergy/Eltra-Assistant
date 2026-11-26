@@ -333,16 +333,9 @@
   .seg2 { display: inline-flex; background: var(--paper); border-radius: 999px; padding: 2px; margin-right: 6px; }
   .seg2 button { font: inherit; font-size: 13px; font-weight: 600; color: var(--muted); background: transparent; border: 0; border-radius: 999px; padding: 4px 10px; min-height: 30px; cursor: pointer; }
   .seg2 button[aria-pressed="true"] { background: #fff; color: var(--blue); box-shadow: 0 1px 2px rgba(20,38,61,.1); }
-  .tsecs { display: flex; flex-wrap: wrap; gap: 6px; padding: 12px 0 10px; }
-  .tsecs button { font: inherit; font-size: 14px; font-weight: 600; color: var(--muted); background: var(--paper); border: 0; border-radius: 999px; padding: 6px 12px; min-height: 36px; cursor: pointer; }
-  .tsecs button[aria-selected="true"] { background: var(--blue-soft); color: var(--blue); }
-  .tsecs button .n { margin-left: 6px; font-size: 12.5px; color: inherit; opacity: .75; }
-  .tsecs button .car { margin-left: 4px; font-size: 11px; opacity: .7; }
-  .tsubs { display: flex; flex-wrap: wrap; gap: 6px; margin: -4px 0 10px; padding: 0 0 0 12px; border-left: 3px solid var(--blue-soft); }
-  .tsubs[hidden] { display: none; }
-  .tsubs button { font: inherit; font-size: 13.5px; font-weight: 600; color: var(--muted); background: transparent; border: 1px solid var(--line); border-radius: 999px; padding: 4px 11px; min-height: 32px; cursor: pointer; }
-  .tsubs button[aria-selected="true"] { background: var(--blue-soft); border-color: transparent; color: var(--blue); }
-  .tsubs button .n { margin-left: 6px; font-size: 12px; color: inherit; opacity: .75; }
+  .tfilt { display: flex; align-items: center; gap: 8px; padding: 12px 0 10px; font-size: 14px; font-weight: 600; color: var(--muted); }
+  .tfilt select { font: inherit; font-size: 14px; color: var(--ink); background: #fff; border: 1px solid var(--line); border-radius: 10px; padding: 6px 10px; min-height: 36px; max-width: 100%; }
+  .tlist .tt small .ttag { display: inline-block; font-size: 12px; font-weight: 600; color: var(--muted); background: var(--paper); border-radius: 6px; padding: 0 7px; margin-right: 6px; }
   .tadd { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 6px; }
   .tadd .grow { flex: 1 1 260px; }
   .tadd input, .tadd select { font: inherit; font-size: 15px; color: var(--ink); background: #fff; border: 1px solid var(--line); border-radius: 10px; padding: 9px 12px; min-height: 44px; width: 100%; }
@@ -351,8 +344,6 @@
   /* collapsible panels and to-do section headers (open or closed is remembered on this device) */
   .hud.shut > :not(.hh) { display: none !important; }
   .hud.shut > .hh { border-bottom: 0; }
-  .tcoll { display: flex; justify-content: flex-end; gap: 6px; margin: 4px 0 2px; }
-  .tcoll[hidden] { display: none; }
   .tlist li.tgrp { display: block; padding: 0; border-top: 1px solid var(--line); }
   .tlist li.tgrp > .tlist > li:first-child { border-top: 0; }
   .tlist li.tgrp.shut > .tlist { display: none; }
@@ -574,10 +565,9 @@
 
 
   <section class="hud todo" aria-labelledby="todoH">
-    <div class="hh"><h2 id="todoH">To do</h2><small><span class="seg2" id="todoWho" role="group" aria-label="Whose to-dos"><button type="button" data-who="mine" aria-pressed="true">Mine</button><button type="button" data-who="all" aria-pressed="false">Everyone</button></span><button type="button" class="copy" id="todoEditSec">Edit sections</button></small></div>
+    <div class="hh"><h2 id="todoH">To do</h2><small><span class="seg2" id="todoWho" role="group" aria-label="Whose to-dos"><button type="button" data-who="mine" aria-pressed="true">Mine</button><button type="button" data-who="will" aria-pressed="false">Will</button><button type="button" data-who="ethan" aria-pressed="false">Ethan</button><button type="button" data-who="all" aria-pressed="false">Everyone</button></span><button type="button" class="copy" id="todoEditSec">Edit sections</button></small></div>
     <div class="hb">
-      <div class="tsecs" id="todoSecs" role="tablist" aria-label="To-do sections"></div>
-      <div class="tsubs" id="todoSubs" role="tablist" aria-label="Sub-sections" hidden></div>
+      <div class="tfilt"><label for="todoFilt">Section</label><select id="todoFilt"></select></div>
       <form class="tadd" id="todoForm">
         <label class="grow"><span class="sr">New to-do</span><input id="todoText" placeholder="Add a to-do…" autocomplete="off"></label>
         <label><span class="sr">Section</span><select id="todoSec"></select></label>
@@ -585,7 +575,6 @@
         <label><span class="sr">Due date (optional)</span><input type="date" id="todoDue"></label>
         <button class="btn" type="submit">Add</button>
       </form>
-      <div class="tcoll" id="todoColl" hidden><button type="button" class="copy" id="todoCollAll">Collapse all</button><button type="button" class="copy" id="todoExpAll">Expand all</button></div>
       <ul class="tlist" id="todoList" aria-live="polite"></ul>
       <button type="button" class="tshow" id="todoShowDone" hidden></button>
       <p class="note err" id="todoErr" role="alert" hidden></p>
