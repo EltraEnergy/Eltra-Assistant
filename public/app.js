@@ -222,7 +222,7 @@
             else if (c.type === 'document') pics += '<span class="attdoc">PDF</span>';
             else if (/^\[Attached photo/.test(c.text) && th[thi]) pics += '<img class="att" alt="Photo you sent" src="' + th[thi++] + '">';
             else if (/^\[Attached /.test(c.text)) pics += '<span class="attdoc">' + esc(c.text.replace(/^\[Attached (\w+).*$/, '$1')) + '</span>';
-            else if (/^\[Photos? saved for posting/.test(c.text)) { /* link for Eltra, not shown */ }
+            else if (/^\[Photos? saved for posting|^\[Photo ".*" could NOT be saved for posting/.test(c.text)) { /* link for Eltra, not shown */ }
             else words += esc(c.text);
           });
           h += '<div class="m you">' + (pics ? '<div class="atts">' + pics + '</div>' : '') + words + '</div>'; return;
@@ -344,6 +344,7 @@
       var blocks = pendingAtt.map(function (p) { return p.block; });
       var links = pendingAtt.filter(function (p) { return p.url; }).map(function (p) { return p.url; });
       if (links.length) blocks.push({ type: 'text', text: '[Photo' + (links.length > 1 ? 's' : '') + ' saved for posting to Instagram: ' + links.join(' ') + ']' });
+      pendingAtt.forEach(function (p) { if (p.urlError) blocks.push({ type: 'text', text: '[Photo "' + p.name + '" could NOT be saved for posting to Instagram: ' + p.urlError + ' Tell the user straight away and ask them to attach it again.]' }); });
       blocks.push({ type: 'text', text: text || (pendingAtt.length > 1 ? 'Here are some files.' : 'Here’s a file.') });
       var smalls = pendingAtt.map(function (p) { return p.small || ''; });
       chat.messages.push({ role: 'user', content: blocks });
@@ -1067,10 +1068,12 @@
         img.onload = function () {
           var k = Math.min(1, 1600 / Math.max(img.width, img.height)), c = document.createElement('canvas');
           c.width = Math.round(img.width * k); c.height = Math.round(img.height * k); c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+          // always a standard JPEG (HEIC/PNG/big phone shots are redrawn), kept well under Instagram's 8 MB
           var data = c.toDataURL('image/jpeg', 0.85); URL.revokeObjectURL(url);
+          for (var qy = 0.75; data.length > 10e6 && qy > 0.4; qy -= 0.1) data = c.toDataURL('image/jpeg', qy);
           var k2 = Math.min(1, 200 / Math.max(img.width, img.height)), t = document.createElement('canvas'); t.width = Math.round(img.width * k2); t.height = Math.round(img.height * k2); t.getContext('2d').drawImage(img, 0, 0, t.width, t.height); p.small = t.toDataURL('image/jpeg', 0.7);
           p.thumb = data; p.block = { type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: data.split(',')[1] } };
-          if (igConnected()) api('media', { method: 'POST', body: { data: data } }).then(function (r) { p.url = r.url; }).catch(function () {}).then(function () { p.loading = false; renderAtt(); });
+          if (igConnected()) api('media', { method: 'POST', body: { data: data } }).then(function (r) { p.url = r.url; }).catch(function (e) { p.urlError = e.message; }).then(function () { p.loading = false; renderAtt(); });
           else { p.loading = false; renderAtt(); }
         };
         img.onerror = function () { pendingAtt.splice(pendingAtt.indexOf(p), 1); renderAtt(); $('vHint').textContent = 'Couldn’t open that photo. Try a JPEG or PNG.'; };

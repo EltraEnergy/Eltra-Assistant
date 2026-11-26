@@ -53,10 +53,29 @@ async function waitReady(container, maxMs = 7000) {
   }
 }
 
+// Fetch an image link the way Instagram will (no login, no redirects) and check it's a JPEG under 8 MB.
+// Returns null when it's fine, or a plain-English problem.
+export async function checkImageLink(u) {
+  try {
+    const res = await fetch(u, { redirect: 'manual', signal: AbortSignal.timeout(6000), headers: { 'User-Agent': 'facebookexternalhit/1.1' } });
+    if (res.status >= 300 && res.status < 400) return 'the link redirects (Instagram needs the image directly)';
+    if (res.status === 404) return 'the link has expired or was copied wrongly (not found)';
+    if (!res.ok) return 'the link answered with error ' + res.status;
+    const type = res.headers.get('content-type') || '', buf = Buffer.from(await res.arrayBuffer());
+    if (!/^image\/jpe?g/i.test(type) || !(buf[0] === 0xff && buf[1] === 0xd8)) return 'the link isn’t a JPEG image (' + (type || 'unknown type') + ')';
+    if (buf.length > 8e6) return 'the image is over 8 MB';
+    return null;
+  } catch (e) { return 'the link couldn’t be reached (' + (e && e.name === 'TimeoutError' ? 'timed out' : e.message) + ')'; }
+}
+
 // Post one photo or a carousel (2–10 images). Image URLs must be public JPEGs: Eltra's own /media links are.
 export async function publishPost({ image_urls, caption }) {
   const id = await igId(), urls = (image_urls || []).filter(Boolean).slice(0, 10);
   if (!urls.length) throw new Error('No images to post');
+  // Check every link first, so a broken one gets a clear reason instead of Instagram's "media could not be fetched"
+  const probs = await Promise.all(urls.map(checkImageLink));
+  const bad = probs.map((p, i) => (p ? 'Image ' + (i + 1) + ': ' + p : null)).filter(Boolean);
+  if (bad.length) throw new Error('Not posted, Instagram wouldn’t be able to fetch the photo. ' + bad.join('; ') + '. Use the exact "saved for posting" link, or ask for the photo to be attached again.');
   let container;
   if (urls.length === 1) container = (await graph(id + '/media', { method: 'POST', params: { image_url: urls[0], caption: caption || '' } })).id;
   else {
