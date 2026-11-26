@@ -682,7 +682,7 @@ async function automationsAsWill({ force = false } = {}) {
         jb.flags.stock = true;
       }
       if (!jb.flags.ces && day <= today && day >= inDays(-3)) {
-        added.push(await addTodo({ owner: 'will', section: 'DNSP - Grid connection', text: 'Create the CES for ' + jb.name + ' and send it to the inspector', due: today, ref: jb.name + ' · auto' }));
+        added.push(await addTodo({ owner: 'will', section: 'DNSP - CES', text: 'Create the CES for ' + jb.name + ' and send it to the inspector', due: today, ref: jb.name + ' · auto' }));
         jb.flags.ces = true;
       }
       if (!jb.flags.comm && day <= inDays(-14)) {

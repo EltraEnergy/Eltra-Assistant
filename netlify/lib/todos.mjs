@@ -39,11 +39,13 @@ export async function loadTodos() {
   // one-off: split "DNSP" into its sub-sections and move the existing DNSP to-dos into the right one
   if (!d.dnspSplit) splitDnsp(sections, d.items || []);
   sections = orderDnsp(sections, d.items || []);
+  // one-off (Will asked for this): the install-day "Create the CES" to-dos used to be added under Grid connection; move the open ones to DNSP - CES
+  if (!d.cesMoved) (d.items || []).forEach((x) => { if (!x.done && /^create the ces\b/i.test(x.text || '') && keyOf(x.section) === keyOf('DNSP - Grid connection')) x.section = 'DNSP - CES'; });
   // to-dos from before Ethan joined have no owner: give his kind of work to him, the rest to Will
   const guessOwner = (x) => ETHAN_WORK.test(x.section || '') || /(book the install|install date|order stock|invoice|xero|myob|instagram|facebook)/i.test(x.text || '') ? 'ethan' : 'will';
   // (older to-dos have no 'by' field; ones you've deliberately reassigned are marked ownerSet)
   const items = (Array.isArray(d.items) ? d.items : []).map((x) => (x.by || x.ownerSet ? x : { ...x, owner: guessOwner(x) }));
-  return { sections, items, teamSections: true, dnspSplit: true };
+  return { sections, items, teamSections: true, dnspSplit: true, cesMoved: true };
 }
 // which DNSP sub-section an old "DNSP" to-do belongs in (by what it says, then by the customers Will listed)
 function dnspSubFor(x) {
