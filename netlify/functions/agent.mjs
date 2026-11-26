@@ -20,7 +20,7 @@ async function pickModel(key, skip) {
 }
 
 function systemPrompt(gs, rules = [], invoices = '', missed = '') {
-  const have = [gs.connected ? 'Gmail, Google Calendar and Google Drive (' + (gs.email || 'Will’s account') + ')' : null, ghlReady() ? 'GoHighLevel (leads pipeline)' : null, sm8Ready() ? 'ServiceM8 (jobs and scheduling)' : null, pylonReady() ? 'Pylon (solar designs, quotes and customer proposals)' : null].filter(Boolean);
+  const have = [gs.connected ? 'Gmail, Google Calendar and Google Drive (' + (gs.email || 'Will’s account') + ')' : null, ghlReady() ? 'GoHighLevel (leads, contacts and pipelines, including the Installation pipeline)' : null, sm8Ready() ? 'ServiceM8 (jobs and scheduling)' : null, pylonReady() ? 'Pylon (solar designs, quotes and customer proposals)' : null].filter(Boolean);
   const ethan = currentUser() === 'ethan';
   const who = ethan ? [
     'WHO YOU ARE TALKING TO: Ethan, not Will. Ethan works with Will at Eltra Energy and looks after four things: ordering stock, setting install dates with customers, accounts and invoicing (Xero and MYOB), and the social media (Facebook and Instagram).',
