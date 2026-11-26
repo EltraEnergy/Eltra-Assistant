@@ -217,6 +217,12 @@ export async function updateItem(id, patch, by = currentUser()) {
   if (patch.action === 'skip') it.status = 'skipped';
   if (patch.action === 'redraft') { it.status = 'planned'; it.feedback = patch.feedback || ''; }
   if (patch.action === 'retry') it.status = 'scheduled';
+  // posted by hand in the Instagram app (Reels, stories, or a photo put up straight from the phone): works from any status.
+  // The post stays in the schedule as posted, so the automatic fill keeps that date taken and sees the topic as used.
+  if (patch.action === 'mark_posted') {
+    it.status = 'posted'; it.postedAt = new Date().toISOString(); it.postedBy = by; it.byHand = true; delete it.error;
+    note(d, 'Marked as posted by hand: ' + it.topic);
+  }
   await saveContent(d); return it;
 }
 // Ethan's (or Will's) own idea, added by hand on the dashboard for a weekday. It's drafted like any other post and
