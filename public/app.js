@@ -1495,9 +1495,8 @@
     var days = Math.round((Date.parse(x.due + 'T00:00:00Z') - Date.parse(today + 'T00:00:00Z')) / 864e5);
     return days <= 0 ? 'red' : days <= 3 ? 'yellow' : 'green';
   }
-  // "Parent - Sub" sections (e.g. "DNSP - Pre approval") show under one parent tab. The stored names don't change.
-  // todoTab is 'All', a section name, or '*' + parent name for a whole parent tab; todoOpen is the parent that's opened out.
-  var todoOpen = '';
+  // "Parent - Sub" sections (e.g. "DNSP - Pre approval") group under one parent in the section filter. The stored names don't change.
+  // todoTab is the section filter: 'All', a section name, or '*' + parent name for a whole parent.
   function secParts(sname) { var m = /^(.+?)\s+-\s+(.+)$/.exec(sname || ''); return m ? { parent: m[1], sub: m[2] } : null; }
   function todoGroups() {
     var groups = [], byName = {};
@@ -1520,42 +1519,22 @@
     return todos.sections.indexOf(tab) >= 0;
   }
   function renderTodos() {
-    var secs = $('todoSecs'), subs = $('todoSubs'); secs.textContent = ''; subs.textContent = '';
-    var count = function (tab) { return todos.items.filter(function (x) { return !x.done && (todoWho === 'all' || mine(x)) && tabHas(tab, x); }).length; };
+    // whose to-dos: mine, Will's, Ethan's or everyone's (unassigned and "both" count for each person)
+    var forWho = function (x) { return todoWho === 'all' || (todoWho === 'mine' ? mine(x) : !x.owner || x.owner === todoWho || x.owner === 'both'); };
+    var count = function (tab) { return todos.items.filter(function (x) { return !x.done && forWho(x) && tabHas(tab, x); }).length; };
     if (!tabExists(todoTab)) todoTab = 'All';
-    var groups = todoGroups(), openG = null;
-    var tabBtn = function (label, tab, n, parent) {
-      var b = document.createElement('button'); b.type = 'button'; b.setAttribute('role', 'tab'); b.setAttribute('aria-selected', tab === todoTab);
-      b.innerHTML = esc(label) + (n ? '<span class="n">' + n + '</span>' : '');
-      parent.appendChild(b); return b;
-    };
-    // picking All or a plain section (e.g. Admin) folds away any opened sub-section row
-    // top row: All, then each plain section or parent tab. On "Mine", only show the ones where you actually have something to do
-    tabBtn('All', 'All', count('All'), secs).onclick = function () { todoTab = 'All'; todoOpen = ''; renderTodos(); };
+    var groups = todoGroups();
+    // optional section filter (default All): a plain section, a whole parent (e.g. All DNSP) or one sub-section, each with its open count
+    var filt = $('todoFilt'); filt.textContent = '';
+    var opt = function (into, label, tab) { var o = document.createElement('option'), n = count(tab); o.value = tab; o.textContent = label + (n ? ' (' + n + ')' : ''); into.appendChild(o); };
+    opt(filt, 'All sections', 'All');
     groups.forEach(function (g) {
-      var tab = g.subs ? '*' + g.name : g.name, inG = g.subs && (todoTab === tab || g.secs.indexOf(todoTab) >= 0), n = count(tab);
-      if (todoWho !== 'all' && !n && !inG && tab !== todoTab) return;
-      if (!g.subs) { tabBtn(g.name, tab, n, secs).onclick = function () { todoTab = tab; todoOpen = ''; $('todoSec').value = tab; renderTodos(); }; return; }
-      var isOpen = todoOpen === g.name, b = tabBtn(g.name, tab, n, secs);
-      if (inG) b.setAttribute('aria-selected', 'true');
-      b.setAttribute('aria-expanded', isOpen); b.setAttribute('aria-controls', 'todoSubs');
-      b.innerHTML += '<span class="car" aria-hidden="true">' + (isOpen ? '▾' : '▸') + '</span>';
-      if (isOpen) openG = g;
-      // first click opens it out (showing the whole group); clicking it again folds the sub-sections away
-      b.onclick = function () { if (todoOpen === g.name && inG) todoOpen = ''; else { todoOpen = g.name; if (!inG) todoTab = tab; } renderTodos(); };
+      if (!g.subs) { opt(filt, g.name, g.name); return; }
+      var og = document.createElement('optgroup'); og.label = g.name; filt.appendChild(og);
+      opt(og, 'All ' + g.name, '*' + g.name);
+      g.secs.forEach(function (sname) { var p = secParts(sname); opt(og, p ? p.sub : 'General', sname); });
     });
-    // second row: the opened parent's sub-sections, each with its own count
-    subs.hidden = !openG;
-    if (openG) {
-      var all = '*' + openG.name;
-      tabBtn('All ' + openG.name, all, count(all), subs).onclick = function () { todoTab = all; renderTodos(); };
-      openG.secs.forEach(function (sname) {
-        var p = secParts(sname), n = count(sname);
-        // DNSP sub-sections always show, in their fixed order, even when empty (Will asked for this)
-        if (todoWho !== 'all' && !n && sname !== todoTab && !/^dnsp$/i.test(openG.name)) return;
-        tabBtn(p ? p.sub : 'General', sname, n, subs).onclick = function () { todoTab = sname; $('todoSec').value = sname; renderTodos(); };
-      });
-    }
+    filt.value = todoTab;
     // "Add" section picker: sub-sections sit under their parent's heading
     var sel = $('todoSec'), cur = sel.value; sel.textContent = '';
     groups.forEach(function (g) {
@@ -1565,49 +1544,23 @@
     });
     var inTabSecs = todos.sections.filter(function (sname) { return tabHas(todoTab, { section: sname }); });
     sel.value = inTabSecs.indexOf(cur) >= 0 ? cur : todoTab !== 'All' && todoTab.charAt(0) !== '*' ? todoTab : (inTabSecs[0] || todos.sections[0]);
-    var inTab = todos.items.filter(function (x) { return (todoWho === 'all' || mine(x)) && tabHas(todoTab, x); });
+    var inTab = todos.items.filter(function (x) { return forWho(x) && tabHas(todoTab, x); });
     $('todoWho').querySelectorAll('button').forEach(function (b) { b.setAttribute('aria-pressed', b.dataset.who === todoWho); });
-    // most urgent first (red, yellow, green, then no rating), then by due date, then oldest first
+    // most urgent first (red, yellow, green, then no rating), then by due date (earliest, so overdue, first), then oldest first
     var urank = function (x) { var u = todoUrgency(x); return u ? URG[u].rank : 3; };
-    var open = inTab.filter(function (x) { return !x.done; }).sort(function (a, b) { return urank(a) - urank(b) || ((a.due || '9999') < (b.due || '9999') ? -1 : (a.due || '9999') > (b.due || '9999') ? 1 : a.createdAt < b.createdAt ? -1 : 1); });
+    var open = inTab.filter(function (x) { return !x.done; }).sort(function (a, b) { return urank(a) - urank(b) || ((a.due || '9999') < (b.due || '9999') ? -1 : (a.due || '9999') > (b.due || '9999') ? 1 : (a.createdAt || '') < (b.createdAt || '') ? -1 : 1); });
     var done = inTab.filter(function (x) { return x.done; }).sort(function (a, b) { return (b.doneAt || '') < (a.doneAt || '') ? -1 : 1; });
-    var list = $('todoList'); list.textContent = '';
     panelCount('todoH', count('All'));
-    if (!open.length) { var e = document.createElement('li'); e.className = 'empty'; e.textContent = todoTab === 'All' ? 'Nothing to do. Add one above, or ask Eltra to.' : 'Nothing in ' + tabLabel(todoTab) + '.'; list.appendChild(e); }
-    var shown = open.concat(showDone ? done : []);
-    // "All" and a parent tab (e.g. DNSP) list the to-dos under collapsible section and sub-section headers; a single section is a plain list
-    var grouped = todoTab === 'All' || todoTab.charAt(0) === '*';
-    $('todoColl').hidden = !grouped || !shown.length;
-    var groupBox = function (key, label, its, into) {
-      var li = document.createElement('li'), k = 'todo:' + key, n = its.filter(function (x) { return !x.done; }).length;
-      li.className = 'tgrp';
-      li.innerHTML = '<button type="button" class="tgh" data-shut="' + esc(k) + '"><span class="car" aria-hidden="true">▸</span><span>' + esc(label) + '</span>' + (n ? '<span class="n">' + n + '</span>' : '') + '</button><ul class="tlist"></ul>';
-      var b = li.firstChild, show = function () { var s = isShut(k); li.classList.toggle('shut', s); b.setAttribute('aria-expanded', s ? 'false' : 'true'); };
-      b.onclick = function () { setShut(k, !isShut(k)); show(); };
-      show(); into.appendChild(li); return li.lastChild;
-    };
-    var inSecs = function (secs) { return shown.filter(function (x) { return secs.indexOf(x.section) >= 0; }); };
-    var subBoxes = function (g, into) {
-      g.secs.forEach(function (sname) {
-        var its = inSecs([sname]), p = secParts(sname);
-        if (its.length) its.forEach(todoItem.bind(null, groupBox(sname, p ? p.sub : 'General', its, into)));
-      });
-    };
-    if (!grouped) shown.forEach(todoItem.bind(null, list));
-    else {
-      var known = [];
-      groups.forEach(function (g) {
-        if (todoTab === 'All') {
-          var its = inSecs(g.secs); known = known.concat(g.secs);
-          if (!its.length) return;
-          var box = groupBox(g.subs ? '*' + g.name : g.name, g.name, its, list);
-          if (g.subs) subBoxes(g, box); else its.forEach(todoItem.bind(null, box));
-        } else if (g.subs && '*' + g.name === todoTab) { known = g.secs; subBoxes(g, list); }
-      });
-      // to-dos whose section has since been renamed or removed still show, under "Other"
-      var rest = shown.filter(function (x) { return known.indexOf(x.section) < 0; });
-      if (rest.length) rest.forEach(todoItem.bind(null, groupBox('~other', 'Other', rest, list)));
-    }
+    // one combined, collapsible "All to-dos" list (open by default); each to-do shows its section as a small tag
+    var list = $('todoList'); list.textContent = '';
+    var li = document.createElement('li'), k = 'todo:~all';
+    li.className = 'tgrp';
+    li.innerHTML = '<button type="button" class="tgh"><span class="car" aria-hidden="true">▸</span><span>All to-dos' + (todoTab === 'All' ? '' : ' · ' + esc(tabLabel(todoTab))) + '</span>' + (open.length ? '<span class="n">' + open.length + '</span>' : '') + '</button><ul class="tlist"></ul>';
+    var hb = li.firstChild, box = li.lastChild, show = function () { var s = isShut(k); li.classList.toggle('shut', s); hb.setAttribute('aria-expanded', s ? 'false' : 'true'); };
+    hb.onclick = function () { setShut(k, !isShut(k)); show(); };
+    show(); list.appendChild(li);
+    if (!open.length) { var e = document.createElement('li'); e.className = 'empty'; e.textContent = todoTab === 'All' ? 'Nothing to do. Add one above, or ask Eltra to.' : 'Nothing in ' + tabLabel(todoTab) + '.'; box.appendChild(e); }
+    open.concat(showDone ? done : []).forEach(todoItem.bind(null, box));
     var sd = $('todoShowDone'); sd.hidden = !done.length; sd.textContent = showDone ? 'Hide finished' : 'Show finished (' + done.length + ')';
   }
   function todoItem(list, it) {
@@ -1615,7 +1568,7 @@
       if (urg) li.title = URG[urg].label + (it.urgency ? '' : ' (from the due date)');
       var due = todoDueText(it.due);
       li.innerHTML = '<input type="checkbox"' + (it.done ? ' checked' : '') + ' aria-label="Done: ' + esc(it.text) + '">' +
-        '<span class="tt" role="button" tabindex="0" title="' + (it.note ? 'Edit or clear the note' : 'Add a note') + '" aria-label="' + (urg ? URG[urg].label + ': ' : '') + esc(it.text) + (it.note ? '. Note: ' + esc(it.note) + '. Edit note' : '. Add a note') + '">' + esc(it.text) + '<small>' + [todos.sections.indexOf(it.section) < 0 ? it.section : '', it.ref, (it.owner && it.owner !== me.user) ? 'for ' + OWNER[it.owner] : ''].filter(Boolean).map(esc).join(' · ') + '</small>' +
+        '<span class="tt" role="button" tabindex="0" title="' + (it.note ? 'Edit or clear the note' : 'Add a note') + '" aria-label="' + (urg ? URG[urg].label + ': ' : '') + esc(it.text) + (it.note ? '. Note: ' + esc(it.note) + '. Edit note' : '. Add a note') + '">' + esc(it.text) + '<small>' + (it.section ? '<span class="ttag">' + esc(it.section) + '</span>' : '') + [it.ref, it.owner && OWNER[it.owner] ? 'for ' + OWNER[it.owner] : ''].filter(Boolean).map(esc).join(' · ') + '</small>' +
         (it.note ? '<small class="tnote"><span aria-hidden="true">📝</span> ' + esc(it.note) + '</small>' : '') + '</span>' +
         '<span class="due ' + (due && !it.done ? due.cls : '') + '">' + (it.meta && it.meta.kind === 'followup' && !it.done ? '<button type="button" class="tdraft" data-draft>Write email</button> ' : '') + (due ? esc(due.txt) : '') + '</span>' +
         '<button type="button" class="x" aria-label="Delete: ' + esc(it.text) + '">×</button>';
@@ -1656,10 +1609,7 @@
     e.preventDefault(); var t = $('todoText').value.trim(); if (!t) return;
     todoCall({ action: 'add', text: t, section: $('todoSec').value, due: $('todoDue').value, owner: $('todoFor').value }).then(function () { $('todoText').value = ''; $('todoDue').value = ''; $('todoText').focus(); });
   };
-  // Collapse all / Expand all: every to-do section and sub-section header showing now
-  function todoShutAll(v) { $('todoList').querySelectorAll('[data-shut]').forEach(function (b) { setShut(b.dataset.shut, v); }); renderTodos(); }
-  $('todoCollAll').onclick = function () { todoShutAll(true); };
-  $('todoExpAll').onclick = function () { todoShutAll(false); };
+  $('todoFilt').onchange = function () { todoTab = this.value; renderTodos(); };
   $('todoShowDone').onclick = function () { showDone = !showDone; renderTodos(); };
   $('todoWho').querySelectorAll('button').forEach(function (b) { b.onclick = function () { todoWho = b.dataset.who; renderTodos(); }; });
   $('todoEditSec').onclick = function () {
