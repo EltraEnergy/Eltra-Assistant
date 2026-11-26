@@ -45,8 +45,14 @@ const ALL = 'supportsAllDrives=true&includeItemsFromAllDrives=true&corpora=allDr
 const fileOut = (f) => ({ id: f.id, name: f.name, type: f.mimeType === FOLDER ? 'folder' : (f.mimeType || '').split('/').pop(), modified: f.modifiedTime ? melbDate(f.modifiedTime) : null, link: f.webViewLink, parent_id: (f.parents || [])[0] || null });
 
 // GoHighLevel (LeadConnector API v2). GHL_TOKEN = a Private Integration token for the sub-account, GHL_LOCATION_ID = its location id.
+// Both live only in Netlify's environment settings, never in the code or in chat.
 export const ghlReady = () => !!(process.env.GHL_TOKEN && process.env.GHL_LOCATION_ID);
+export function ghlMissing() {
+  const miss = [!process.env.GHL_TOKEN ? 'GHL_TOKEN' : null, !process.env.GHL_LOCATION_ID ? 'GHL_LOCATION_ID' : null].filter(Boolean);
+  return miss.length ? 'GoHighLevel isn’t connected yet: ' + miss.join(' and ') + (miss.length > 1 ? ' are' : ' is') + ' missing. Add ' + (miss.length > 1 ? 'them' : 'it') + ' in Netlify (Site configuration › Environment variables), then redeploy.' : null;
+}
 export async function ghl(path, opts = {}) {
+  const miss = ghlMissing(); if (miss) throw new Error(miss);
   const res = await fetch('https://services.leadconnectorhq.com' + path, {
     ...opts, headers: { Authorization: 'Bearer ' + process.env.GHL_TOKEN, Version: '2021-07-28', Accept: 'application/json', ...(opts.body ? { 'Content-Type': 'application/json' } : {}) }
   });
@@ -55,26 +61,65 @@ export async function ghl(path, opts = {}) {
   return d;
 }
 let pipeCache = null;
-export async function ghlPipelines() {
-  if (pipeCache && pipeCache.t > Date.now() - 600000) return pipeCache.p;
+export async function ghlPipelines(fresh) {
+  if (!fresh && pipeCache && pipeCache.t > Date.now() - 600000) return pipeCache.p;
   const d = await ghl('/opportunities/pipelines?locationId=' + encodeURIComponent(process.env.GHL_LOCATION_ID));
-  pipeCache = { t: Date.now(), p: (d.pipelines || []).map((p) => ({ id: p.id, name: p.name, stages: (p.stages || []).map((s) => ({ id: s.id, name: s.name })) })) };
+  pipeCache = { t: Date.now(), p: (d.pipelines || []).map((p) => ({ id: p.id, name: p.name, stages: (p.stages || []).slice().sort((a, b) => (a.position ?? 0) - (b.position ?? 0)).map((s) => ({ id: s.id, name: s.name })) })) };
   return pipeCache.p;
 }
 async function stageName(id) { const ps = await ghlPipelines().catch(() => []); for (const p of ps) for (const s of p.stages) if (s.id === id) return p.name + ' › ' + s.name; return id; }
+// Pick one item by name: an exact match (ignoring case, spaces and punctuation) or else one partial match.
+// Refuses (throws) when nothing matches or more than one does, listing the choices.
+const ghlNorm = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+export function ghlPick(list, name, what) {
+  const n = ghlNorm(name), all = list.map((x) => '"' + x.name + '"').join(', ') || 'none';
+  if (!n) throw new Error('Please say which ' + what + ' (choices: ' + all + ').');
+  let hits = list.filter((x) => ghlNorm(x.name) === n);
+  if (!hits.length) hits = list.filter((x) => ghlNorm(x.name).includes(n) || (ghlNorm(x.name) && n.includes(ghlNorm(x.name))));
+  if (hits.length === 1) return hits[0];
+  if (!hits.length) throw new Error('There’s no ' + what + ' called "' + name + '" (choices: ' + all + '). Nothing was changed.');
+  throw new Error('"' + name + '" matches more than one ' + what + ' (' + hits.map((x) => '"' + x.name + '"').join(', ') + '). Please say exactly which one. Nothing was changed.');
+}
+export const ghlContactOut = (c) => c && ({
+  id: c.id, name: [c.firstName || c.firstNameLowerCase, c.lastName || c.lastNameLowerCase].filter(Boolean).join(' ') || c.contactName || c.name || null,
+  phone: c.phone || null, email: c.email || null, address: [c.address1, c.city, c.state, c.postalCode].filter(Boolean).join(', ') || null,
+  company: c.companyName || null, tags: c.tags || [], source: c.source || null, added: c.dateAdded ? melbDate(c.dateAdded) : null
+});
+export function ghlOppOut(o, pipes = []) {
+  const p = pipes.find((x) => x.id === o.pipelineId), st = p ? p.stages.find((s) => s.id === o.pipelineStageId) : pipes.flatMap((x) => x.stages).find((s) => s.id === o.pipelineStageId);
+  return {
+    id: o.id, name: o.name, pipeline: p ? p.name : o.pipelineId || null, pipeline_id: o.pipelineId || null, stage: st ? st.name : o.pipelineStageId, stage_id: o.pipelineStageId,
+    status: o.status, value: o.monetaryValue || null,
+    contact_id: o.contactId || (o.contact && o.contact.id), contact: o.contact ? { name: o.contact.name, phone: o.contact.phone, email: o.contact.email } : null,
+    source: o.source || null, created: o.createdAt ? melbDate(o.createdAt) : null, updated: o.updatedAt ? melbDate(o.updatedAt) : null
+  };
+}
 export async function ghlOpps(params) {
   const sp = new URLSearchParams({ location_id: process.env.GHL_LOCATION_ID, limit: String(params.limit || 20) });
   if (params.query) sp.set('q', params.query);
   if (params.status) sp.set('status', params.status);
   if (params.pipeline_stage_id) sp.set('pipeline_stage_id', params.pipeline_stage_id);
   if (params.pipeline_id) sp.set('pipeline_id', params.pipeline_id);
+  if (params.contact_id) sp.set('contact_id', params.contact_id);
   const d = await ghl('/opportunities/search?' + sp);
-  const names = {}; (await ghlPipelines().catch(() => [])).forEach((p) => p.stages.forEach((s) => { names[s.id] = s.name; }));
-  return (d.opportunities || []).map((o) => ({
-    id: o.id, name: o.name, stage: names[o.pipelineStageId] || o.pipelineStageId, status: o.status, value: o.monetaryValue || null,
-    contact_id: o.contactId || (o.contact && o.contact.id), contact: o.contact ? { name: o.contact.name, phone: o.contact.phone, email: o.contact.email } : null,
-    source: o.source || null, created: o.createdAt ? melbDate(o.createdAt) : null, updated: o.updatedAt ? melbDate(o.updatedAt) : null
-  }));
+  const pipes = await ghlPipelines().catch(() => []);
+  return (d.opportunities || []).map((o) => ghlOppOut(o, pipes));
+}
+export async function ghlGetOpp(id) {
+  const d = await ghl('/opportunities/' + encodeURIComponent(id));
+  const o = d && (d.opportunity || d);
+  if (!o || !o.id) throw new Error('Couldn’t find that GoHighLevel opportunity (' + id + ').');
+  return o;
+}
+// Find an existing contact by email first, then phone (GoHighLevel's own duplicate check). null when there isn't one.
+export async function ghlFindContact({ email, phone }) {
+  const loc = encodeURIComponent(process.env.GHL_LOCATION_ID);
+  const tries = [email ? '&email=' + encodeURIComponent(String(email).trim()) : null, phone ? '&number=' + encodeURIComponent(auMobile(phone) || String(phone).trim()) : null].filter(Boolean);
+  for (const q of tries) {
+    const d = await ghl('/contacts/search/duplicate?locationId=' + loc + q).catch(() => null);
+    if (d && d.contact && d.contact.id) return d.contact;
+  }
+  return null;
 }
 
 // ServiceM8. SERVICEM8_API_KEY = an API key from ServiceM8 (Settings > API Keys).
@@ -513,40 +558,151 @@ tool({
   async run({ file_id, name }) { await g(DRIVE + '/files/' + encodeURIComponent(file_id) + '?supportsAllDrives=true', { method: 'PATCH', body: JSON.stringify({ name }) }); return { renamed: name }; }
 });
 
+// GoHighLevel: read-only lookups, plus two approved writes (create an Installation opportunity, move a stage).
+const ghlCantDo = (e) => ({ title: 'GoHighLevel: this can’t go ahead', lines: [e.message, 'Approving this won’t change anything in GoHighLevel.'] });
+async function ghlPipeArg(pipes, pipeline) {
+  if (!pipeline) return null;
+  return pipes.find((p) => p.id === pipeline) || ghlPick(pipes, pipeline, 'pipeline');
+}
 tool({
-  name: 'ghl_pipelines', group: 'ghl',
-  description: 'List the GoHighLevel pipelines and their stages (with ids).',
+  name: 'ghl_list_pipelines', group: 'ghl',
+  description: 'List the GoHighLevel pipelines and their stages in order (with ids).',
   input_schema: { type: 'object', properties: {} },
-  run: () => ghlPipelines()
-});
-tool({
-  name: 'ghl_search_opportunities', group: 'ghl',
-  description: 'Find leads/opportunities in GoHighLevel. Filter by a name/phone/email search, a pipeline stage id (from ghl_pipelines) or status (open, won, lost, abandoned).',
-  input_schema: { type: 'object', properties: { query: { type: 'string' }, pipeline_stage_id: { type: 'string' }, status: { type: 'string', enum: ['open', 'won', 'lost', 'abandoned', 'all'] }, limit: { type: 'integer' } } },
-  run: (i) => ghlOpps({ ...i, status: i.status === 'all' ? null : i.status, limit: Math.min(50, i.limit || 20) })
+  run: () => ghlPipelines(true)
 });
 tool({
   name: 'ghl_search_contacts', group: 'ghl',
   description: 'Find contacts in GoHighLevel by name, phone or email.',
-  input_schema: { type: 'object', properties: { query: { type: 'string' } }, required: ['query'] },
+  input_schema: { type: 'object', properties: { query: { type: 'string', description: 'a name, phone number or email' } }, required: ['query'] },
   async run({ query }) {
     const d = await ghl('/contacts/search', { method: 'POST', body: JSON.stringify({ locationId: process.env.GHL_LOCATION_ID, query, pageLimit: 10 }) });
-    return (d.contacts || []).map((c) => ({ id: c.id, name: [c.firstName || c.firstNameLowerCase, c.lastName || c.lastNameLowerCase].filter(Boolean).join(' ') || c.contactName, phone: c.phone, email: c.email, address: [c.address1, c.city, c.postalCode].filter(Boolean).join(', '), tags: c.tags, added: c.dateAdded ? melbDate(c.dateAdded) : null }));
+    return (d.contacts || []).map(ghlContactOut);
+  }
+});
+tool({
+  name: 'ghl_get_contact', group: 'ghl',
+  description: 'Get one GoHighLevel contact’s details by contact id (from ghl_search_contacts or an opportunity).',
+  input_schema: { type: 'object', properties: { contact_id: { type: 'string' } }, required: ['contact_id'] },
+  async run({ contact_id }) {
+    const d = await ghl('/contacts/' + encodeURIComponent(contact_id));
+    const c = d && (d.contact || d);
+    return { ...ghlContactOut(c), custom_fields: (c.customFields || c.customField || []).filter((f) => f && f.value != null && f.value !== '').slice(0, 30) };
+  }
+});
+tool({
+  name: 'ghl_search_opportunities', group: 'ghl',
+  description: 'Find leads/opportunities in GoHighLevel. Filter by a name/phone/email search, a contact id, a pipeline (name or id), a stage name within it, or status (open, won, lost, abandoned, all; default all).',
+  input_schema: { type: 'object', properties: {
+    query: { type: 'string' }, contact_id: { type: 'string' }, pipeline: { type: 'string', description: 'pipeline name or id, e.g. "Installation"' },
+    stage: { type: 'string', description: 'stage name (or id); give the pipeline too if several pipelines share stage names' }, pipeline_stage_id: { type: 'string' },
+    status: { type: 'string', enum: ['open', 'won', 'lost', 'abandoned', 'all'] }, limit: { type: 'integer', description: 'Up to 50, default 20' }
+  } },
+  async run(i) {
+    const pipes = (i.pipeline || i.stage) ? await ghlPipelines() : [];
+    const pipe = await ghlPipeArg(pipes, i.pipeline);
+    let stageId = i.pipeline_stage_id || null;
+    if (!stageId && i.stage) {
+      const stages = (pipe ? [pipe] : pipes).flatMap((p) => p.stages);
+      stageId = (stages.find((s) => s.id === i.stage) || ghlPick(stages, i.stage, 'stage')).id;
+    }
+    return ghlOpps({ query: i.query, contact_id: i.contact_id, pipeline_id: pipe && pipe.id, pipeline_stage_id: stageId, status: !i.status || i.status === 'all' ? null : i.status, limit: Math.min(50, i.limit || 20) });
+  }
+});
+tool({
+  name: 'ghl_get_opportunity', group: 'ghl',
+  description: 'Get one GoHighLevel opportunity by id: its pipeline, stage, status, value and contact.',
+  input_schema: { type: 'object', properties: { opportunity_id: { type: 'string' } }, required: ['opportunity_id'] },
+  async run({ opportunity_id }) { return ghlOppOut(await ghlGetOpp(opportunity_id), await ghlPipelines()); }
+});
+
+const ghlMoney = (v) => { if (v == null || v === '') return null; const n = typeof v === 'number' ? v : parseFloat(String(v).replace(/[^\d.]/g, '')); return isFinite(n) && n > 0 ? Math.round(n * 100) / 100 : null; };
+const ghlAud = (n) => '$' + n.toLocaleString('en-AU', { minimumFractionDigits: 0, maximumFractionDigits: 2 });
+// Works out everything for a new Installation opportunity, without changing anything.
+async function ghlPlanCreate(i) {
+  const name = String(i.customer_name || '').trim();
+  if (!name) throw new Error('I need the customer’s name for the opportunity.');
+  if (!i.contact_id && !i.email && !i.phone) throw new Error('I need the customer’s email or phone to find (or create) their GoHighLevel contact.');
+  const pipe = ghlPick(await ghlPipelines(true), 'Installation', 'pipeline');
+  if (!pipe.stages.length) throw new Error('The "' + pipe.name + '" pipeline has no stages.');
+  const stage = i.stage ? ghlPick(pipe.stages, i.stage, 'stage in the "' + pipe.name + '" pipeline') : pipe.stages[0];
+  let contact = null;
+  if (i.contact_id) { const d = await ghl('/contacts/' + encodeURIComponent(i.contact_id)); contact = d && (d.contact || d); }
+  else contact = await ghlFindContact({ email: i.email, phone: i.phone });
+  let existing = [];
+  if (contact && contact.id) existing = (await ghlOpps({ contact_id: contact.id, pipeline_id: pipe.id, status: 'open', limit: 20 })).filter((o) => o.contact_id === contact.id && o.pipeline_id === pipe.id);
+  return { name, pipe, stage, contact: contact && contact.id ? contact : null, existing, value: ghlMoney(i.value) };
+}
+tool({
+  name: 'ghl_create_opportunity', group: 'ghl', action: true,
+  description: 'Create an opportunity in the GoHighLevel "Installation" pipeline for a customer. Finds their contact by email or phone (or contact_id) and creates the contact if there isn’t one. The opportunity is named after the customer, with the system price as its value when known. Starts in the pipeline’s first stage unless you give another stage by name. Won’t create a second one if the contact already has an open opportunity in that pipeline.',
+  input_schema: { type: 'object', properties: {
+    customer_name: { type: 'string', description: 'full name; also used as the opportunity name' }, email: { type: 'string' }, phone: { type: 'string' },
+    contact_id: { type: 'string', description: 'if you already know the GoHighLevel contact' },
+    value: { type: 'number', description: 'system price in dollars, if known' }, stage: { type: 'string', description: 'stage name in the Installation pipeline; leave out for the first stage' }
+  }, required: ['customer_name'] },
+  async describe(i) {
+    let p; try { p = await ghlPlanCreate(i); } catch (e) { return ghlCantDo(e); }
+    if (p.existing.length) return { title: 'GoHighLevel: already in the ' + p.pipe.name + ' pipeline', lines: ['Customer: ' + p.name].concat(p.existing.map((o) => 'Open opportunity: ' + o.name + ' (' + o.stage + ')'), ['Nothing new will be created.']) };
+    const c = ghlContactOut(p.contact);
+    return { title: 'Create an opportunity in GoHighLevel', lines: [
+      'Customer: ' + p.name,
+      c ? 'Contact: existing (' + [c.name, c.email, c.phone].filter(Boolean).join(', ') + ')' : 'Contact: new contact will be created (' + [i.email, i.phone].filter(Boolean).join(', ') + ')',
+      'Pipeline: ' + p.pipe.name, 'Stage: ' + p.stage.name, 'Value: ' + (p.value ? ghlAud(p.value) : 'not set')
+    ] };
+  },
+  async run(i) {
+    const p = await ghlPlanCreate(i);
+    if (p.existing.length) return { created: false, reason: 'This contact already has an open opportunity in the ' + p.pipe.name + ' pipeline, so no new one was made.', existing: p.existing };
+    let contactId = p.contact && p.contact.id, newContact = false;
+    if (!contactId) {
+      const parts = p.name.split(/\s+/);
+      const body = { locationId: process.env.GHL_LOCATION_ID, firstName: parts[0], lastName: parts.slice(1).join(' ') || undefined, name: p.name, email: i.email || undefined, phone: i.phone ? (auMobile(i.phone) || i.phone) : undefined, source: 'Eltra' };
+      const c = await ghl('/contacts/', { method: 'POST', body: JSON.stringify(body) });
+      contactId = (c.contact && c.contact.id) || c.id; newContact = true;
+      if (!contactId) throw new Error('GoHighLevel didn’t return the new contact, so no opportunity was made.');
+    }
+    const body = { locationId: process.env.GHL_LOCATION_ID, pipelineId: p.pipe.id, pipelineStageId: p.stage.id, name: p.name, status: 'open', contactId, ...(p.value ? { monetaryValue: p.value } : {}) };
+    const d = await ghl('/opportunities/', { method: 'POST', body: JSON.stringify(body) });
+    const o = d && (d.opportunity || d);
+    return { created: true, opportunity_id: o && o.id, name: p.name, pipeline: p.pipe.name, stage: p.stage.name, value: p.value, contact_id: contactId, new_contact: newContact };
+  }
+});
+
+// Works out a stage move (stage looked up by name inside the opportunity's own pipeline), without changing anything.
+async function ghlPlanMove({ opportunity_id, stage }) {
+  const o = await ghlGetOpp(opportunity_id);
+  const pipe = (await ghlPipelines(true)).find((p) => p.id === o.pipelineId);
+  if (!pipe) throw new Error('Couldn’t find the pipeline this opportunity is in.');
+  const to = ghlPick(pipe.stages, stage, 'stage in the "' + pipe.name + '" pipeline');
+  const from = pipe.stages.find((s) => s.id === o.pipelineStageId);
+  return { o, pipe, to, from: from ? from.name : 'unknown', customer: (o.contact && o.contact.name) || o.name };
+}
+tool({
+  name: 'ghl_move_opportunity_stage', group: 'ghl', action: true,
+  description: 'Move an existing GoHighLevel opportunity to another stage in its own pipeline, by stage name (e.g. "Install booked"). Refuses if the name matches no stage or more than one. Find the opportunity id with ghl_search_opportunities first.',
+  input_schema: { type: 'object', properties: { opportunity_id: { type: 'string' }, stage: { type: 'string', description: 'the new stage’s name' } }, required: ['opportunity_id', 'stage'] },
+  async describe(i) {
+    let p; try { p = await ghlPlanMove(i); } catch (e) { return ghlCantDo(e); }
+    return { title: 'Move a GoHighLevel opportunity', lines: ['Customer: ' + p.customer, 'Pipeline: ' + p.pipe.name, 'Current stage: ' + p.from, 'New stage: ' + p.to.name + (p.to.id === p.o.pipelineStageId ? ' (already there, nothing will change)' : '')] };
+  },
+  async run(i) {
+    const p = await ghlPlanMove(i);
+    if (p.to.id === p.o.pipelineStageId) return { moved: false, reason: p.customer + ' is already in "' + p.to.name + '".' };
+    await ghl('/opportunities/' + encodeURIComponent(p.o.id), { method: 'PUT', body: JSON.stringify({ pipelineId: p.pipe.id, pipelineStageId: p.to.id }) });
+    return { moved: true, customer: p.customer, pipeline: p.pipe.name, from: p.from, to: p.to.name };
   }
 });
 tool({
   name: 'ghl_move_opportunity', group: 'ghl', action: true,
-  description: 'Move a GoHighLevel opportunity to another pipeline stage (and optionally mark it won/lost). Use stage ids from ghl_pipelines.',
-  input_schema: { type: 'object', properties: { opportunity_id: { type: 'string' }, pipeline_stage_id: { type: 'string' }, status: { type: 'string', enum: ['open', 'won', 'lost', 'abandoned'] } }, required: ['opportunity_id'] },
-  async describe({ opportunity_id, pipeline_stage_id, status }) {
-    const o = await ghl('/opportunities/' + encodeURIComponent(opportunity_id)).catch(() => null);
-    const opp = o && (o.opportunity || o);
-    return { title: 'Update a lead in GoHighLevel', lines: [(opp && opp.name) || opportunity_id, pipeline_stage_id ? 'Move to: ' + await stageName(pipeline_stage_id) : null, status ? 'Mark as: ' + status : null].filter(Boolean) };
+  description: 'Mark a GoHighLevel opportunity as won, lost, abandoned or open again. To move it to another stage use ghl_move_opportunity_stage instead.',
+  input_schema: { type: 'object', properties: { opportunity_id: { type: 'string' }, status: { type: 'string', enum: ['open', 'won', 'lost', 'abandoned'] } }, required: ['opportunity_id', 'status'] },
+  async describe({ opportunity_id, status }) {
+    const opp = await ghlGetOpp(opportunity_id).catch(() => null);
+    return { title: 'Update a lead in GoHighLevel', lines: [(opp && ((opp.contact && opp.contact.name) || opp.name)) || opportunity_id, opp ? 'Stage: ' + await stageName(opp.pipelineStageId) : null, 'Mark as: ' + status].filter(Boolean) };
   },
-  async run({ opportunity_id, pipeline_stage_id, status }) {
-    const body = {}; if (pipeline_stage_id) body.pipelineStageId = pipeline_stage_id; if (status) body.status = status;
-    await ghl('/opportunities/' + encodeURIComponent(opportunity_id), { method: 'PUT', body: JSON.stringify(body) });
-    return { updated: true };
+  async run({ opportunity_id, status }) {
+    await ghl('/opportunities/' + encodeURIComponent(opportunity_id), { method: 'PUT', body: JSON.stringify({ status }) });
+    return { updated: true, status };
   }
 });
 tool({
@@ -1254,8 +1410,9 @@ tool({
   async run({ id }) { await decide(id, 'reject'); return { removed: true }; }
 });
 
-// Tools available right now (only the systems that are set up)
+// Tools available right now (only the systems that are set up). GoHighLevel tools always show, so if its settings
+// are missing Eltra can say so plainly instead of acting as if GoHighLevel doesn't exist.
 export function activeTools() {
-  return T.filter((t) => t.group === 'google' ? !!process.env.GOOGLE_CLIENT_ID : t.group === 'ghl' ? ghlReady() : t.group === 'sm8' ? sm8Ready() : t.group === 'pylon' ? pylonReady() : t.group === 'instagram' ? igSetUp() : t.group === 'sms' ? smsReady() : true);
+  return T.filter((t) => t.group === 'google' ? !!process.env.GOOGLE_CLIENT_ID : t.group === 'sm8' ? sm8Ready() : t.group === 'pylon' ? pylonReady() : t.group === 'instagram' ? igSetUp() : t.group === 'sms' ? smsReady() : true);
 }
 export const toolByName = (n) => T.find((t) => t.name === n);
