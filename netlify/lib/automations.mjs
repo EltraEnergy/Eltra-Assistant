@@ -17,7 +17,7 @@
 //  • every Monday morning → "Do payroll", every Saturday morning → "Do ServiceM8" (Ethan, Accounts, due that day)
 // Runs on a schedule (functions/automations.mjs) and whenever the dashboard loads the to-do list (at most every 15 min).
 import { store, runAs, melbToday } from './util.mjs';
-import { addTodo, loadTodos, updateTodo } from './todos.mjs';
+import { addTodo, loadTodos, updateTodo, FOLLOW_UPS_SECTION } from './todos.mjs';
 import { pylon, pylonReady, pylonProject, pylonDesign, DESIGN_FIELDS, toolByName, invitee } from './tools.mjs';
 import { googleStatus, g, CAL, GMAIL } from './google.mjs';
 import { claudeJSON } from './claude.mjs';
@@ -90,7 +90,7 @@ async function followUpStep(s, p, name, google, today, budget) {   // google/bud
   if (s.followDay.count >= FOLLOW_PER_DAY) return false;            // today's quota used: next run tomorrow
   const st = STAGE[f.stage];
   // no email is written here: the Draft email button on this to-do asks Eltra to draft it in front of Will, for approval
-  const t = await addTodo({ owner: 'will', section: 'Quoting', text: st.text(name), due: today, ref: name + ' · auto', meta: { kind: 'followup', stage: f.stage + 1, of: STAGE.length, customer: name, email: (p.customer && p.customer.email) || '', projectId: p.id, brief: st.brief, sentDays: Math.round(sentDays) } });
+  const t = await addTodo({ owner: 'will', section: FOLLOW_UPS_SECTION, text: st.text(name), due: today, ref: name + ' · auto', meta: { kind: 'followup', stage: f.stage + 1, of: STAGE.length, customer: name, email: (p.customer && p.customer.email) || '', projectId: p.id, brief: st.brief, sentDays: Math.round(sentDays) } });
   s.follow[p.id] = { stage: f.stage + 1, lastAt: new Date().toISOString(), todoId: t.id };
   s.followDay.count++;
   return true;

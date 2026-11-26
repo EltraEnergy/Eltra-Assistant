@@ -8,6 +8,10 @@ const ETHAN_SECTIONS = ['Install dates', 'Accounts', 'Socials'];
 // DNSP is split into these sub-sections (Will asked for this), always shown together in this order
 const DNSP_SUBS = ['DNSP - Pre approval', 'DNSP - Grid connection', 'DNSP - Solar Vic', 'DNSP - Retailer request'];
 const DNSP_ORDER = ['DNSP - Solar Vic', 'DNSP - Pre approval', 'DNSP - CES', 'DNSP - Grid connection', 'DNSP - Retailer request'];   // the order the jobs happen
+// Quoting sub-sections (Will asked for this), always shown together in this order. Follow-ups used to be their own "Follow ups" section.
+const QUOTING_ORDER = ['Quoting - To quote', 'Quoting - Send proposal', 'Quoting - Follow ups'];
+export const FOLLOW_UPS_SECTION = QUOTING_ORDER[2];
+const OLD_FOLLOW_UPS = /^follow[\s-]*ups?$/i;
 // Ethan looks after stock, socials, install dates and accounts/invoicing
 const ETHAN_WORK = /(stock|install date|booking|account|invoic|social)/i;
 // who a to-do is for: 'will', 'ethan' or 'both'
@@ -39,11 +43,14 @@ export async function loadTodos() {
   // one-off: split "DNSP" into its sub-sections and move the existing DNSP to-dos into the right one
   if (!d.dnspSplit) splitDnsp(sections, d.items || []);
   sections = orderDnsp(sections, d.items || []);
+  // one-off: move everything in the old "Follow ups" section into "Quoting - Follow ups" and drop "Follow ups"
+  if (!d.quotingFollowUps) sections = moveFollowUps(sections, d.items || []);
+  sections = orderQuoting(sections, d.items || []);
   // to-dos from before Ethan joined have no owner: give his kind of work to him, the rest to Will
   const guessOwner = (x) => ETHAN_WORK.test(x.section || '') || /(book the install|install date|order stock|invoice|xero|myob|instagram|facebook)/i.test(x.text || '') ? 'ethan' : 'will';
   // (older to-dos have no 'by' field; ones you've deliberately reassigned are marked ownerSet)
   const items = (Array.isArray(d.items) ? d.items : []).map((x) => (x.by || x.ownerSet ? x : { ...x, owner: guessOwner(x) }));
-  return { sections, items, teamSections: true, dnspSplit: true };
+  return { sections, items, teamSections: true, dnspSplit: true, quotingFollowUps: true };
 }
 // which DNSP sub-section an old "DNSP" to-do belongs in (by what it says, then by the customers Will listed)
 function dnspSubFor(x) {
@@ -78,6 +85,24 @@ function orderDnsp(sections, items) {
   const before = sections.slice(0, start).filter((s) => !isDnsp(s));
   return [...before, ...plain, ...DNSP_ORDER, ...extra, ...others.slice(before.length)];
 }
+function moveFollowUps(sections, items) {
+  // (open auto follow-up to-dos that were filed under plain "Quoting" move too)
+  items.forEach((x) => { if (OLD_FOLLOW_UPS.test(x.section || '') || (!x.done && x.meta && x.meta.kind === 'followup' && /^quoting$/i.test(x.section || ''))) x.section = FOLLOW_UPS_SECTION; });
+  return sections.filter((s) => !OLD_FOLLOW_UPS.test(s));
+}
+// Like DNSP: the Quoting sub-sections sit together in QUOTING_ORDER (after plain "Quoting" if it's still there), even when empty.
+// Any other "Quoting - …" sub-sections follow them; every other section keeps its place.
+function orderQuoting(sections, items) {
+  const isQuoting = (s) => /^quoting\s*([-–—:].*)?$/i.test(s);
+  const fixed = (s) => QUOTING_ORDER.find((n) => keyOf(n) === keyOf(s));
+  items.forEach((x) => { const f = fixed(x.section); if (f) x.section = f; });
+  const at = sections.findIndex(isQuoting);
+  const plain = sections.filter((s) => /^quoting$/i.test(s));
+  const extra = sections.filter((s) => isQuoting(s) && !/^quoting$/i.test(s) && !fixed(s));
+  const others = sections.filter((s) => !isQuoting(s));
+  const start = at < 0 ? others.length : sections.slice(0, at).filter((s) => !isQuoting(s)).length;
+  return [...others.slice(0, start), ...plain, ...QUOTING_ORDER, ...extra, ...others.slice(start)];
+}
 const save = (d) => store().setJSON(KEY, d);
 // One write at a time: each change loads, edits and saves the list before the next starts,
 // so two changes made together can't overwrite each other.
@@ -90,6 +115,8 @@ const keyOf = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, '');
 function pickSection(d, name, create) {
   const n = str(name, 40); if (!n) return d.sections[0];
   const low = n.toLowerCase(), key = keyOf(n);
+  // "Follow ups" (the old section) now means "Quoting - Follow ups"
+  if (/^(quoting)?followups?$/.test(key)) return d.sections.find((s) => s === FOLLOW_UPS_SECTION) || FOLLOW_UPS_SECTION;
   const exact = d.sections.find((s) => s.toLowerCase() === low) || (key && d.sections.find((s) => keyOf(s) === key));
   if (exact) return exact;
   const sub = n.match(/^(.+?)\s*[-–—:]\s*(.+)$/);
