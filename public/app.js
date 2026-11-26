@@ -1190,7 +1190,7 @@
     if (openPost) { var cur = (CS.items || []).find(function (x) { return x.id === openPost; }); if (cur && $('postDlg').open && !$('postDlg').dataset.dirty) fillPost(cur); }
   }
   // one card per post: header line (date · format · status), topic, caption (2 lines + Show more), then one row of actions.
-  // The actions are the same ones the post window offers, in a fixed order: Approve, Redraft, Edit, Skip, Delete.
+  // The actions are the same ones the post window offers, in a fixed order: Approve, Redraft, Edit, Skip, Mark as posted, Delete.
   function contentCard(it) {
     var w = whenText(it), card = document.createElement('article'), s = it.status, cap = it.caption || it.angle || '';
     card.className = 'ccard st-' + s;
@@ -1214,6 +1214,7 @@
     }
     act(s === 'posted' || s === 'manual' || s === 'skipped' ? 'Open' : 'Edit', 'no', function () { showPost(it.id); });
     if (s === 'draft' || s === 'failed' || s === 'planned') act('Skip', 'no', function () { contentCall({ action: 'skip', id: it.id }).catch(fail()); });
+    if (s !== 'posted') act('Mark as posted', 'no', function (e) { if (!confirm('Mark this post as posted? Use this when it was put up by hand in the Instagram app. Eltra won’t post it again.')) return; var b = e.target; b.disabled = true; contentCall({ action: 'mark_posted', id: it.id }).catch(fail(b)); }, 'Mark ' + w.day + ' post as posted: ' + it.topic);
     if (s !== 'posted') act('Delete', 'no ca-del', function () { if (confirm('Delete this post from the schedule for good? Eltra won’t plan another one for that date.')) contentCall({ action: 'delete', id: it.id }).catch(fail()); }, 'Delete ' + w.day + ' post: ' + it.topic);
     return card;
   }
@@ -1260,7 +1261,7 @@
     if (it.format === 'photo' && it.photo) h += '<label>Photo to use<pre>' + esc(it.photo) + '</pre></label>';
     if (it.format === 'story' && it.frames) h += '<label>Story frames<pre>' + it.frames.map(function (x, i) { return (i + 1) + '. ' + esc(x); }).join('\n') + '</pre></label>';
     if (it.format !== 'story' && it.caption != null && it.status !== 'planned') h += '<label>Caption<textarea id="pdCap"' + (editable ? '' : ' disabled') + '>' + esc(it.caption || '') + '</textarea></label>' + (it.check ? '<div class="meta">Checks: ' + esc([it.check.verdict && 'humanizer ' + it.check.verdict, it.check.caption && 'caption ' + it.check.caption, it.check.hook && 'hook ' + it.check.hook].filter(Boolean).join(' · ')) + '</div>' : '');
-    if (it.status === 'posted') h += '<p><a href="' + esc(it.link || '#') + '" target="_blank" rel="noopener">View the post on Instagram</a></p>';
+    if (it.status === 'posted') h += it.link ? '<p><a href="' + esc(it.link) + '" target="_blank" rel="noopener">View the post on Instagram</a></p>' : '<p class="note">Posted by hand in the Instagram app' + (it.postedAt ? ' (marked ' + esc(new Date(it.postedAt).toLocaleString('en-AU', { timeZone: 'Australia/Melbourne', day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' })) + ')' : '') + '.</p>';
     if (it.status === 'failed') h += '<p class="note err">Didn’t post: ' + esc(it.error || 'unknown error') + '</p>';
     if (it.approvedBy) h += '<div class="meta">Approved by ' + esc(it.approvedBy === me.user ? 'you' : it.approvedBy === 'ethan' ? 'Ethan' : 'Will') + '</div>';
     b.innerHTML = h;
@@ -1280,6 +1281,7 @@
     } else if (it.status === 'planned') {
       btn('Skip', 'no', function () { postAction({ action: 'skip' }); });
     }
+    if (it.status !== 'posted') btn('Mark as posted', 'no', function () { if (confirm('Mark this post as posted? Use this when it was put up by hand in the Instagram app. Eltra won’t post it again.')) postAction({ action: 'mark_posted' }); });
     if (it.status !== 'posted') btn('Delete', 'no', function () { if (confirm('Delete this post from the schedule for good? Eltra won’t plan another one for that date.')) postAction({ action: 'delete' }); });
   }
   function currentSlides() { var out = []; $('pdBody').querySelectorAll('[data-sh]').forEach(function (el) { var i = +el.dataset.sh; out[i] = { heading: el.value, body: ($('pdBody').querySelector('[data-sb="' + i + '"]') || {}).value || '' }; }); return out; }
